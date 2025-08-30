@@ -1,0 +1,18 @@
+[INFO] => Did Not Find catalog_test.parquet.
+[TREK] => Created catalog_file placeholder as <class 'pandas.core.frame.DataFrame'>
+[INFO] => No New Files in .
+[Report] => merge_catalog 
+ 
+Inputs: 
+ args=() 
+ kwargs={'staging_dir': '.', 'catalog_file': './catalog_test.parquet', 'report': True, 'trek': True, 'info': True, 'note': True, 'message_file': './message_file.logs', 'print_colors': False} 
+ 
+Output: 
+ None 
+ 
+Execution time: 0.001605 seconds
+Memory before: 88.99 MB
+Memory after: 89.12 MB
+Memory change: +0.13 MB
+----------------------------------------
+
