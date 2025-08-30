@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atmoz"
+version = "0.0.1"
+description = "Atmoshperic Science Toolkit focused on Groundbased Datasets"
+readme = "README.md"
+authors = [
+    { name = "Maurice Roots", email = "mrmoroots@gmail.com" }
+]
+requires-python = ">=3.8"
+dependencies = [
+    "pandas",
+    "numpy",
+    "pyarrow"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["atmoz*"]
+
+[tool.setuptools.package-data]
+"atmoz.schemas" = ["*.arrow"]
