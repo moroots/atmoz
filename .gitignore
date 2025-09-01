@@ -89,9 +89,7 @@ composer.lock
 .env.*
 *.local
 *.secret
-
-# Explicitly ignore your svcode config
-.svcode
+atmoz.egg-info/
 
 # ===================================
 # IDE / EDITORS
