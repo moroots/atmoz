@@ -1,7 +1,0 @@
-pandas
-numpy
-pyarrow
-pyyaml
-requests
-matplotlib
-tqdm
