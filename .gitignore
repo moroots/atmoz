@@ -90,7 +90,7 @@ composer.lock
 *.local
 *.secret
 atmoz.egg-info/
-.ipynb_checkpoints/
+atmoz/.ipynb_checkpoints/
 
 # ===================================
 # IDE / EDITORS
