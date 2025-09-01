@@ -89,7 +89,7 @@ composer.lock
 .env.*
 *.local
 *.secret
-atmoz.egg-info/
+.atmoz.egg-info/
 
 # ===================================
 # IDE / EDITORS
