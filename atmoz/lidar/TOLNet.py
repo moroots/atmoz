@@ -21,6 +21,8 @@ from tqdm import tqdm
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import string
+
 # %% Function Space
 
 # pd.set_option('future.no_silent_downcasting', True) # Remove warning about future behavior
@@ -83,10 +85,43 @@ class filter_files:
 
 
 class utilities:
+    curtain_params = {
+                "ylabel": "Altitude (km ASL)",
+                "xlabel": "Datetime (UTC)",
+                "fontsize_label": 18,
+                "fontsize_ticks": 16,
+                "fontsize_title": 20,
+                "title": {
+                    "label": r"$O_3$ Mixing Ratio Profile",
+                    "fontsize": 16
+                },
+                "savefig": {
+                    "fname": None,
+                    "dpi": 300,
+                    "transparent": True,
+                    "format": "png",
+                    "bbox_inches": "tight"
+                },
+                "ylims": [0, 12],
+                "yticks": np.arange(0, 15.1, 1),
+                "figsize": (30, 8),
+                "layout": "tight",
+                "cbar_label": "Ozone ($ppb_v$)",
+                "fontsize_cbar": 16,
+                "xlims": ["2025-06-15", "2025-08-15"],
+                "grid": {
+                    "visible": True,
+                    "color": "gray",
+                    "linestyle": "--",
+                    "linewidth": 0.5
+                }
+            }
+
     def __init__(self):
         self.data = {}
         self.troubleshoot = {}
         return
+
 
     def O3_curtain_colors(self):
         """
@@ -164,8 +199,8 @@ class utilities:
                 linestyle=params.get("grid_linestyle", "--"),
                 linewidth=params.get("grid_linewidth", 0.5),
             )
-        return 
-        
+        return
+
     def curtain_plot(self, X, Y, Z, use_countourf=False, **kwargs):
         params = {
             "ylabel": "Altitude (km ASL)",
@@ -190,11 +225,9 @@ class utilities:
         ncmap, nnorm = self.O3_curtain_colors()
 
         fig, ax = kwargs.get("figure", (None, None))
-        if not fig or ax: 
+        if not fig or ax:
             fig, ax = plt.subplots(1, 1, figsize=params["figsize"], layout=params["layout"])
 
-        print(fig, ax)
-        
         if use_countourf:
             levels = nnorm.boundaries
             im = ax.contourf(X, Y, Z, levels=levels, cmap=ncmap, norm=nnorm)
@@ -482,7 +515,7 @@ class TOLNet(GEOS_CF):
         A DataFrame containing that same metadata
 
         """
-        try: 
+        try:
             df = pd.DataFrame(
                 meta_data["value"]["data"],
                 columns=meta_data["altitude"]["data"],
@@ -491,10 +524,10 @@ class TOLNet(GEOS_CF):
             df = df.apply(pd.to_numeric)
             df[df.isnull()] = np.nan
             df.sort_index(inplace=True)
-        except Exception as e: 
+        except Exception as e:
             self.troubleshoot["TOLNet"].append(f"_unpack_data: {e}")
-            return 
-        
+            return
+
         return df
 
     def import_data(self, min_date, max_date, **kwargs):
@@ -557,7 +590,7 @@ class TOLNet(GEOS_CF):
                         meta_data["fileInfo"]["processing_type_name"],
                         lat_lon,
                     )
-                    
+
                     if key not in self.data.keys():
                         self.data[key] = {}
                         self.meta_data[key] = {}
@@ -633,7 +666,7 @@ class TOLNet(GEOS_CF):
                     df.columns,
                     df.to_numpy().T,
                 )
-                
+
 
             else:
                 T = []
@@ -684,3 +717,106 @@ if __name__ == "__main__":
     data.tolnet_curtains()
 
 # %%
+
+
+params = {
+        "ylabel": "Altitude (km ASL)",
+        "xlabel": "Datetime (UTC)",
+        "fontsize_label": 18,
+        "fontsize_ticks": 16,
+        "fontsize_title": 20,
+        "title": {
+            "label": r"$O_3$ Mixing Ratio Profile",
+            "fontsize": 16
+        },
+        "savefig": {
+            "fname": None,
+            "dpi": 300,
+            "transparent": True,
+            "format": "png",
+            "bbox_inches": "tight"
+        },
+        "ylims": [0, 12],
+        "yticks": np.arange(0, 15.1, 1),
+        "figsize": (30, 8),
+        "layout": "tight",
+        "cbar_label": "Ozone ($ppb_v$)",
+        "fontsize_cbar": 16,
+        "xlims": ["2025-06-15", "2025-08-15"],
+        "grid": {
+            "visible": True,
+            "color": "gray",
+            "linestyle": "--",
+            "linewidth": 0.5
+        }
+    }
+
+translator = str.maketrans({c: "_" for c in string.punctuation})
+
+
+
+
+
+def curtain_plot(data: dict, **kwargs):
+    fig, ax = plt.subplots(
+        ncols = 1,
+        nrows = 1,
+        figsize=params["figsize"],
+        layout=params["layout"]
+        )
+
+    for date in data[key].keys():
+        df = data[key][date].copy()
+
+        X, Y, Z = (
+                    df.index,
+                    df.columns,
+                    df.to_numpy().T,
+                )
+
+        ncmap, nnorm = utilities().O3_curtain_colors()
+
+        if kwargs.get("use_countourf", False):
+            levels = nnorm.boundaries
+            im = ax.contourf(X, Y, Z, levels=levels, cmap=ncmap, norm=nnorm)
+
+        else:
+            im = ax.pcolormesh(X, Y, Z, cmap=ncmap, norm=nnorm, shading="nearest", alpha=1)
+
+    cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 101, 10), 200, 300])
+    cbar.set_label(label=params["cbar_label"], size=16, weight="bold")
+
+    plt.setp(ax.get_xticklabels(), fontsize=params["fontsize_ticks"])
+    plt.setp(ax.get_yticklabels(), fontsize=params["fontsize_ticks"])
+
+    cbar.ax.tick_params(labelsize=params["fontsize_ticks"])
+    plt.title(**params["title"])
+
+    ax.set_ylabel(params["ylabel"], fontsize=params["fontsize_label"])
+    ax.set_xlabel(params["xlabel"], fontsize=params["fontsize_label"])
+
+    xlims = params.get("xlims", None)
+    if xlims:
+        xlims = [np.datetime64(x) for x in xlims]
+        ax.set_xlim(xlims)
+
+    ax.set_yticks(params["yticks"])
+
+    ax.set_ylim(params["ylims"])
+
+    converter = mdates.ConciseDateConverter()
+    munits.registry[datetime.datetime] = converter
+    ax.xaxis_date()
+
+    ax.grid(**params["grid"])
+    ax.xaxis.set_minor_locator(mdates.DayLocator(interval=1))
+
+    if params["savefig"]["fname"]:
+        plt.savefig(**params["savefig"])
+
+    plt.show()
+
+
+
+
+#%%

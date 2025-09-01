@@ -8,3 +8,9 @@ Description-Content-Type: text/markdown
 Requires-Dist: pandas
 Requires-Dist: numpy
 Requires-Dist: pyarrow
+Requires-Dist: pyyaml
+Requires-Dist: requests
+Requires-Dist: matplotlib
+Requires-Dist: tqdm
+
+# ReadMe
