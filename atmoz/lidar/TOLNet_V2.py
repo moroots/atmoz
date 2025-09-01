@@ -13,7 +13,7 @@ import yaml
 import pandas as pd
 import requests
 from pathlib import Path
-from functools import cached_property
+from functools import cached_property, lru_cache, cache
 
 import pandas as pd
 import numpy as np
@@ -179,12 +179,12 @@ class utilities:
         ncmap = mpl.colors.ListedColormap(ncolors)
         ncmap.set_under([1, 1, 1])
         ncmap.set_over([0, 0, 0])
-        bounds = [0.001, *np.arange(5, 100, 5), 100, 110, 125, 150, 200, 300, 600]
+        bounds = [0.001, *np.arange(5, 121, 5), 150, 200, 300, 600]
         nnorm = mpl.colors.BoundaryNorm(bounds, ncmap.N)
         return ncmap, nnorm
 
     def _plot_settings(self, fig, ax, params, im):
-        cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 101, 10), 110, 150, 200, 300, 600])
+        cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 121, 10), 150, 200, 300, 600])
         cbar.set_label(label=params["cbar_label"], size=16)
 
         plt.setp(ax.get_xticklabels(), fontsize=params["fontsize_ticks"])
@@ -804,25 +804,36 @@ dates = pd.date_range("2020-01-01", "2020-01-02", freq="1min")
 values = range(len(dates))
 
 
-
 def curtain_plot(data: dict, **kwargs):
     with plt.rc_context(theme):
         fig, ax = plt.subplots()
         _apply_time_axis(ax, major="Hour", major_interval=2, minor="Minute", minor_interval=30)
 
-        for key in data.keys():
-            df = data[key].copy()
-            if kwargs.get("time_resolution", "auto"): 
+        xlims = kwargs.get("xlims", "auto")
+        dates = sorted(list(data.keys()))
+
+        if xlims == "auto": 
+            pass   
+        elif isinstance(xlims, list): 
+            xlims = pd.to_datetime(xlims)
+            xlims = [xlims.min(), xlims.max()]
+            dates = pd.to_datetime(dates)
+            dates = [ str(x.strftime("%Y-%m-%d")) for x in dates[(dates >= xlims[0]) & (dates <= xlims[1])] ]
+
+        for date in dates:
+
+            df = data[date].copy()
+
+            time_resolution = kwargs.get("time_resolution", "auto")
+
+            if time_resolution == "auto": 
                 resolution = np.min([df.index[i] - df.index[i-1] for i in range(1, len(df))])
-                df = df.resample(f"{resolution.seconds}S").mean()
+                df = df.resample(f"{resolution.seconds}s").mean()
             else: 
                 df = df.resample(f"{time_resolution}").mean()
 
-            X, Y, Z = (
-                        df.index,
-                        df.columns,
-                        df.to_numpy().T,
-                    )
+            X, Y, Z = ( df.index, df.columns, df.to_numpy().T )
+            
             ncmap, nnorm = utilities().O3_curtain_colors()
 
             if kwargs.get("use_countourf", False):
@@ -831,8 +842,8 @@ def curtain_plot(data: dict, **kwargs):
 
             else:
                 im = ax.pcolormesh(X, Y, Z, cmap=ncmap, norm=nnorm, shading="nearest", alpha=1)
-
-        cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 101, 10), 125, 150, 200, 300, 600])
+# 
+        cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 121, 10), 150, 200, 300, 600])
         cbar.set_label(label=params["cbar_label"], size=16, weight="bold")
 
         cbar.ax.tick_params(labelsize=params["fontsize_ticks"])
