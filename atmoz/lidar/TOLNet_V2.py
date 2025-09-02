@@ -23,6 +23,9 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.units as munits
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import matplotlib.image as image
 
 from dateutil import tz
 
@@ -38,10 +41,6 @@ from typing import Union
 
 
 #%% Classes
-
-class utilities:
-    def __init__(self):
-        return
 
 class filter_files:
     def __init__(self, df, ptypes):
@@ -136,6 +135,7 @@ class utilities:
         self.troubleshoot = {}
         return
 
+    @cached_property
     def O3_curtain_colors(self):
         """
         Returns
@@ -182,7 +182,7 @@ class utilities:
         bounds = [0.001, *np.arange(5, 121, 5), 150, 200, 300, 600]
         nnorm = mpl.colors.BoundaryNorm(bounds, ncmap.N)
         return ncmap, nnorm
-
+    
     def _plot_settings(self, fig, ax, params, im):
         cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 121, 10), 150, 200, 300, 600])
         cbar.set_label(label=params["cbar_label"], size=16)
@@ -257,6 +257,35 @@ class utilities:
             plt.show()
 
         return
+    
+    def _apply_time_axis(self, ax, major="Day", major_interval=7, minor="Day",
+                     minor_interval=1, auto=False, date_format=None):
+        """Apply time-axis formatting to an Axes."""
+        locator_map = {
+            "Year": mdates.YearLocator,
+            "Month": mdates.MonthLocator,
+            "Day": mdates.DayLocator,
+            "Hour": mdates.HourLocator,
+            "Minute": mdates.MinuteLocator,
+        }
+
+        if auto:
+            locator = mdates.AutoDateLocator()
+            ax.xaxis.set_major_locator(locator)
+            ax.xaxis.set_major_formatter(
+                mdates.DateFormatter(date_format) if date_format else mdates.AutoDateFormatter(locator)
+            )
+        else:
+            ax.xaxis.set_major_locator(locator_map[major](interval=major_interval))
+            ax.xaxis.set_minor_locator(locator_map[minor](interval=minor_interval))
+            ax.xaxis.set_major_formatter(
+                mdates.DateFormatter(date_format) if date_format
+                else mdates.ConciseDateFormatter(ax.xaxis.get_major_locator())
+            )
+
+        ax.minorticks_on()
+        ax.grid(which="both", linestyle="--", alpha=0.7)
+        return ax
 
 class GEOS_CF(utilities):
     # https://dphttpdev01.nccs.nasa.gov/data-services/cfapi/assim/chm/v72/O3/39x-77/20230808/20230811
@@ -328,6 +357,7 @@ class GEOS_CF(utilities):
                     self.troubleshoot["GEOS_CF"].append(f"{e}")
 
         return self
+    
 def get_asset(filename: str) -> Path:
     """
     Retrieve an asset file included in the same package as this module.
@@ -386,6 +416,45 @@ class TOLNet(utilities):
             "longitude": "int16",
             "altitude": "int16",
             "isAccessible": "bool",
+            }
+        self.curtain_plot_theme = {
+            # ime_Tick label font sizes
+            "xtick.labelsize": 12,      # previously params["fontsize_ticks"]
+            "ytick.labelsize": 12,
+
+            # Axes labels
+            "axes.labelsize": 14,       # previously params["fontsize_label"]
+
+            # Title font
+            "axes.titlesize": 16,       # previously params["title"]["fontsize"]
+            "axes.titleweight": "bold",
+
+            # Grid style
+            "axes.grid": True,
+            "grid.linestyle": "--",
+            "grid.alpha": 0.7,
+            "axes.grid.which": "both",
+
+            # Minor ticks
+            "xtick.minor.visible": True,
+            "ytick.minor.visible": True,
+            "xtick.minor.size": 3,
+            "ytick.minor.size": 3,
+            "xtick.minor.width": 0.5,
+            "ytick.minor.width": 0.5,
+
+            # Major ticks
+            "xtick.major.size": 5,
+            "ytick.major.size": 5,
+            "xtick.major.width": 1,
+            "ytick.major.width": 1,
+
+            # Figure size (optional)
+            "figure.figsize": (15, 6),
+
+            # Fonts
+            "font.family": "Courier New",
+            "font.size": 14
             }
         self.data = {}
         self.troubleshoot["TOLNet"] = []
@@ -597,7 +666,7 @@ class TOLNet(utilities):
             .file_type(**kwargs)
             .processing_type(**kwargs)
             .df
-        )
+            )
 
         self.request_dates = (min_date, max_date)
         self.meta_data = {}
@@ -607,7 +676,7 @@ class TOLNet(utilities):
             future_to_file = {
                 executor.submit(process_file, file_name, file_id): file_name
                 for file_name, file_id in zip(self.files["file_name"], self.files["id"])
-            }
+                }
 
             for future in tqdm(as_completed(future_to_file),
                                total=len(future_to_file),
@@ -661,7 +730,82 @@ class TOLNet(utilities):
         img = Image.open(path).convert("RGBA")  # ensure alpha channel
         return np.array(img)
 
+    def tolnet_curtain_plot(self, data: dict, **kwargs):
+        with plt.rc_context(self.curtain_plot_theme):
+            fig, ax = plt.subplots()
+            self._apply_time_axis(ax, major="Hour", major_interval=2, minor="Minute", minor_interval=30)
 
+            xlims = kwargs.get("xlims", "auto")
+            dates = sorted(list(data.keys()))
+
+            if xlims == "auto": 
+                pass   
+            elif isinstance(xlims, list): 
+                xlims = pd.to_datetime(xlims, utc=True)
+                xlims = [xlims.min(), xlims.max()]
+                dates = pd.to_datetime(dates, utc=True)
+                dates = [ str(x.strftime("%Y-%m-%d")) for x in dates[(dates >= xlims[0]) & (dates <= xlims[1])] ]
+
+            for date in dates:
+                df = data[date].copy()[xlims[0]:xlims[1]]
+                if df.empty:
+                    continue
+
+                time_resolution = kwargs.get("time_resolution", "auto")
+
+                if time_resolution == "auto": 
+                    resolution = np.min([df.index[i] - df.index[i-1] for i in range(1, len(df))])
+                    df = df.resample(f"{resolution.seconds}s").mean()
+                else: 
+                    df = df.resample(f"{time_resolution}").mean()
+
+                X, Y, Z = ( df.index, df.columns, df.to_numpy().T )
+
+                ncmap, nnorm = self.O3_curtain_colors
+
+                if kwargs.get("use_countourf", False):
+                    levels = nnorm.boundaries
+                    im = ax.contourf(X, Y, Z, levels=levels, cmap=ncmap, norm=nnorm)
+                else:
+                    im = ax.pcolormesh(X, Y, Z, cmap=ncmap, norm=nnorm, shading="nearest", alpha=1)
+
+            cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 121, 10), 150, 200, 300, 600])
+            cbar.set_label(label=params["cbar_label"], size=16, weight="bold")
+
+            cbar.ax.tick_params(labelsize=params["fontsize_ticks"])
+            plt.title(**params["title"])
+
+            ax.set_ylabel(params["ylabel"], fontsize=params["fontsize_label"])
+            ax.set_xlabel(params["xlabel"], fontsize=params["fontsize_label"])
+
+            xlims = params.get("xlims", None)
+            if xlims:
+                xlims = [np.datetime64(x) for x in xlims]
+                ax.set_xlim(xlims)
+
+            ax.set_yticks(params["yticks"])
+
+
+            ax.set_ylim(params["ylims"])
+
+            if params["savefig"]["fname"]:
+                plt.savefig(**params["savefig"])
+
+            
+            with open(r"E:/Projects/atmoz/atmoz/assets/watermarks/TOLNet.png", "rb") as file:
+                im = image.imread(file)
+
+            ax_wm = fig.add_axes([0.12, 0.73, 0.3, 0.15], anchor='SW', zorder=10)
+            ax_wm.imshow(im, alpha=0.7)
+            ax_wm.axis('off')
+
+            for i in np.arange(0.3, 1, 0.4):
+                ax.text(i, 0.5, 'NRT DATA. NOT CITABLE.', transform=ax.transAxes,
+                        fontsize=30, color='black', alpha=0.5,
+                        ha='center', va='center', rotation=25
+                        )
+
+            plt.show()
 
 if __name__ == "__main__":
     tolnet = TOLNet()
@@ -700,7 +844,7 @@ params = {
             "format": "png",
             "bbox_inches": "tight"
         },
-        "ylims": [0, 12],
+        "ylims": [0, 15],
         "yticks": np.arange(0, 15.1, 1),
         "figsize": (30, 8),
         "layout": "tight",
@@ -722,163 +866,8 @@ translator = str.maketrans({c: "_" for c in string.punctuation})
 
 #%%
 
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-
-# Define theme dictionary
-theme = {
-    # ime_Tick label font sizes
-    "xtick.labelsize": 12,      # previously params["fontsize_ticks"]
-    "ytick.labelsize": 12,
-
-    # Axes labels
-    "axes.labelsize": 14,       # previously params["fontsize_label"]
-
-    # Title font
-    "axes.titlesize": 16,       # previously params["title"]["fontsize"]
-    "axes.titleweight": "bold",
-
-    # Grid style
-    "axes.grid": True,
-    "grid.linestyle": "--",
-    "grid.alpha": 0.7,
-    "axes.grid.which": "both",
-
-    # Minor ticks
-    "xtick.minor.visible": True,
-    "ytick.minor.visible": True,
-    "xtick.minor.size": 3,
-    "ytick.minor.size": 3,
-    "xtick.minor.width": 0.5,
-    "ytick.minor.width": 0.5,
-
-    # Major ticks
-    "xtick.major.size": 5,
-    "ytick.major.size": 5,
-    "xtick.major.width": 1,
-    "ytick.major.width": 1,
-
-    # Figure size (optional)
-    "figure.figsize": (15, 6),
-
-    # Fonts
-    "font.family": "Courier New",
-    "font.size": 14
-}
 
 
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from contextlib import contextmanager
-
-def _apply_time_axis(ax, major="Day", major_interval=7, minor="Day",
-                     minor_interval=1, auto=False, date_format=None):
-    """Apply time-axis formatting to an Axes."""
-    locator_map = {
-        "Year": mdates.YearLocator,
-        "Month": mdates.MonthLocator,
-        "Day": mdates.DayLocator,
-        "Hour": mdates.HourLocator,
-        "Minute": mdates.MinuteLocator,
-    }
-
-    if auto:
-        locator = mdates.AutoDateLocator()
-        ax.xaxis.set_major_locator(locator)
-        ax.xaxis.set_major_formatter(
-            mdates.DateFormatter(date_format) if date_format else mdates.AutoDateFormatter(locator)
-        )
-    else:
-        ax.xaxis.set_major_locator(locator_map[major](interval=major_interval))
-        ax.xaxis.set_minor_locator(locator_map[minor](interval=minor_interval))
-        ax.xaxis.set_major_formatter(
-            mdates.DateFormatter(date_format) if date_format
-            else mdates.ConciseDateFormatter(ax.xaxis.get_major_locator())
-        )
-
-    ax.minorticks_on()
-    return ax
-
-# Wide range of data (5 years of monthly points)
-dates = pd.date_range("2020-01-01", "2020-01-02", freq="1min")
-values = range(len(dates))
 
 
-def curtain_plot(data: dict, **kwargs):
-    with plt.rc_context(theme):
-        fig, ax = plt.subplots()
-        _apply_time_axis(ax, major="Hour", major_interval=2, minor="Minute", minor_interval=30)
-
-        xlims = kwargs.get("xlims", "auto")
-        dates = sorted(list(data.keys()))
-
-        if xlims == "auto": 
-            pass   
-        elif isinstance(xlims, list): 
-            xlims = pd.to_datetime(xlims)
-            xlims = [xlims.min(), xlims.max()]
-            dates = pd.to_datetime(dates)
-            dates = [ str(x.strftime("%Y-%m-%d")) for x in dates[(dates >= xlims[0]) & (dates <= xlims[1])] ]
-
-        for date in dates:
-
-            df = data[date].copy()
-
-            time_resolution = kwargs.get("time_resolution", "auto")
-
-            if time_resolution == "auto": 
-                resolution = np.min([df.index[i] - df.index[i-1] for i in range(1, len(df))])
-                df = df.resample(f"{resolution.seconds}s").mean()
-            else: 
-                df = df.resample(f"{time_resolution}").mean()
-
-            X, Y, Z = ( df.index, df.columns, df.to_numpy().T )
-            
-            ncmap, nnorm = utilities().O3_curtain_colors()
-
-            if kwargs.get("use_countourf", False):
-                levels = nnorm.boundaries
-                im = ax.contourf(X, Y, Z, levels=levels, cmap=ncmap, norm=nnorm)
-
-            else:
-                im = ax.pcolormesh(X, Y, Z, cmap=ncmap, norm=nnorm, shading="nearest", alpha=1)
-# 
-        cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 121, 10), 150, 200, 300, 600])
-        cbar.set_label(label=params["cbar_label"], size=16, weight="bold")
-
-        cbar.ax.tick_params(labelsize=params["fontsize_ticks"])
-        plt.title(**params["title"])
-
-        ax.set_ylabel(params["ylabel"], fontsize=params["fontsize_label"])
-        ax.set_xlabel(params["xlabel"], fontsize=params["fontsize_label"])
-
-        xlims = params.get("xlims", None)
-        if xlims:
-            xlims = [np.datetime64(x) for x in xlims]
-            ax.set_xlim(xlims)
-
-        ax.set_yticks(params["yticks"])
-
-        ax.set_ylim(params["ylims"])
-
-
-        if params["savefig"]["fname"]:
-            plt.savefig(**params["savefig"])
-
-        import matplotlib.image as image
-        with open(r"E:/Projects/atmoz/atmoz/assets/watermarks/TOLNet.png", "rb") as file:
-            im = image.imread(file)
-
-        # [left, bottom, width, height] in figure fraction (0-1)
-        ax_wm = fig.add_axes([0.12, 0.73, 0.3, 0.15], anchor='SW', zorder=10)
-        ax_wm.imshow(im, alpha=0.7)
-        ax_wm.axis('off')  # hide axes for the watermark
-
-        for i in np.arange(0.3, 1, 0.4):
-            ax.text(i, 0.5, 'NRT DATA. NOT CITABLE.', transform=ax.transAxes,
-                    fontsize=30, color='black', alpha=0.5,
-                    ha='center', va='center', rotation=25)
-
-        plt.show()
-
-curtain_plot(data.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '40.89x-111.89')], **params)
+tolnet.tolnet_curtain_plot(data.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '40.89x-111.89')], **params)
