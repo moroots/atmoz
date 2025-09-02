@@ -23,9 +23,6 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.units as munits
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import matplotlib.image as image
 
 from dateutil import tz
 
@@ -39,10 +36,7 @@ import importlib.resources as resources
 from pathlib import Path
 from typing import Union
 
-from atmoz.resources.utilities import merge_dicts
-
-
-#%% Classes
+from atmoz.resources.useful_functions import merge_dicts
 
 class filter_files:
     def __init__(self, df, ptypes):
@@ -185,36 +179,6 @@ class utilities:
         nnorm = mpl.colors.BoundaryNorm(bounds, ncmap.N)
         return ncmap, nnorm
     
-    def _plot_settings(self, fig, ax, params, im):
-        cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 121, 10), 150, 200, 300, 600])
-        cbar.set_label(label=params["cbar_label"], size=16)
-
-        plt.setp(ax.get_xticklabels(), fontsize=params["fontsize_ticks"])
-        plt.setp(ax.get_yticklabels(), fontsize=params["fontsize_ticks"])
-
-        cbar.ax.tick_params(labelsize=params["fontsize_ticks"])
-        plt.title(params["title"], fontsize=params["fontsize_title"])
-
-        ax.set_ylabel(params["ylabel"], fontsize=params["fontsize_label"])
-        ax.set_xlabel(params["xlabel"], fontsize=params["fontsize_label"])
-
-        ax.set_xlim([np.datetime64(params["xlims"][0]), np.datetime64(params["xlims"][1])])
-
-        ax.set_yticks(params["yticks"])
-
-        ax.set_ylim(params["ylims"])
-
-        converter = mdates.ConciseDateConverter()
-        munits.registry[datetime.datetime] = converter
-        ax.xaxis_date()
-
-        if params["grid"]:
-            ax.grid(
-                color=params.get("grid_color", "gray"),
-                linestyle=params.get("grid_linestyle", "--"),
-                linewidth=params.get("grid_linewidth", 0.5),
-            )
-        return
 
     def curtain_plot(self, X, Y, Z, use_countourf=False, **kwargs):
         params = {
@@ -259,37 +223,6 @@ class utilities:
             plt.show()
 
         return
-    
-    def _apply_time_axis(self, ax, major="Day", major_interval=7, minor="Day",
-                     minor_interval=1, auto=True, date_format=None):
-        """Apply time-axis formatting to an Axes."""
-
-        locator_map = {
-            "Year": mdates.YearLocator,
-            "Month": mdates.MonthLocator,
-            "Day": mdates.DayLocator,
-            "Hour": mdates.HourLocator,
-            "Minute": mdates.MinuteLocator,
-            "Auto": mdates.AutoDateLocator,
-        }
-
-        if auto:
-            locator = mdates.AutoDateLocator()
-            ax.xaxis.set_major_locator(locator)
-            ax.xaxis.set_major_formatter(mdates.ConciseDateConverter(locator))
-        else:
-            ax.xaxis.set_major_locator(locator_map[major](
-                interval=major_interval,
-                nbins=max_major_))
-            ax.xaxis.set_minor_locator(locator_map[minor](interval=minor_interval))
-            ax.xaxis.set_major_formatter(
-                mdates.DateFormatter(date_format) if date_format
-                else mdates.ConciseDateFormatter(ax.xaxis.get_major_locator())
-            )
-
-        ax.minorticks_on()
-        ax.grid(which="both", linestyle="--", alpha=0.7)
-        return ax
 
 class GEOS_CF(utilities):
     # https://dphttpdev01.nccs.nasa.gov/data-services/cfapi/assim/chm/v72/O3/39x-77/20230808/20230811
@@ -828,11 +761,6 @@ if __name__ == "__main__":
         min_date=date_start, max_date=date_end, product_type=product_IDs, GEOS_CF=False
         )
 
-
-#%%
-
-
-
 translator = str.maketrans({c: "_" for c in string.punctuation})
 
 #%%
@@ -843,60 +771,8 @@ translator = str.maketrans({c: "_" for c in string.punctuation})
 #%% 
 
 import matplotlib.pyplot as plt
-
-
-def __apply_water_mark(fig, filepath, **kwargs):
-    params = {
-        "add_axes": {
-            "rect": [0.12, 0.73, 0.3, 0.15],
-            "anchor": "SW",
-            "zorder": 10
-        }
-    }
-    params = merge_dicts(params, kwargs)
-    with open(filepath, "rb") as file:
-            im = image.imread(file)
-    ax_wm = fig.add_axes(**params["add_axes"])
-    ax_wm.imshow(im, alpha=0.7)
-    ax_wm.axis('off')
-    return fig
-
-def __add_plot_params(ax, params: dict):
-    for func_name, kwargs in params.items():
-        target = getattr(ax, func_name, None) or getattr(plt, func_name, None)
-        if callable(target):
-            if isinstance(kwargs, dict):
-                target(**kwargs)
-            elif isinstance(kwargs, (list, tuple)):
-                target(*kwargs)
-            else:
-                target(kwargs)  # single scalar
-    return 
-
-def __apply_near_real_time(ax, **kwargs):
-    params = {
-        "s": 'NRT DATA. NOT CITABLE.',
-        "fontsize": 30,
-        "color": "black",
-        "ha": "center",
-        "va": "center",
-        "rotation": 25,
-        "transform": ax.transAxes,
-        "alpha": 0.5 
-        }
-    params = merge_dicts(params, kwargs)
-    
-    ax.text(0.3, 0.5, , transform=ax.transAxes,
-            fontsize=30, color='black', alpha=0.5,
-            ha='center', va='center', rotation=25
-            )
-    
-    ax.text(0.7, 0.5, 'NRT DATA. NOT CITABLE.', transform=ax.transAxes,
-        fontsize=30, color='black', alpha=0.5,
-        ha='center', va='center', rotation=25
-        )
-    
-    return 
+from atmoz.resources import plot_utilities
+from atmoz.resources import useful_functions
 
 def tolnet_curtain_plot(data: dict, **kwargs):
     default = {
@@ -916,6 +792,7 @@ def tolnet_curtain_plot(data: dict, **kwargs):
         "grid": {
             "visible": True,
             "color": "gray",
+
             "linestyle": "--",
             "linewidth": 0.5
             },
@@ -941,7 +818,8 @@ def tolnet_curtain_plot(data: dict, **kwargs):
             }
         }
 
-    params = merge_dicts(default, kwargs)
+    params = useful_functions.merge_dicts(default, kwargs)
+
     with plt.rc_context(tolnet.curtain_plot_theme):
         fig, ax = plt.subplots()
 
@@ -985,13 +863,14 @@ def tolnet_curtain_plot(data: dict, **kwargs):
 
         cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 121, 10), 150, 200, 300, 600])
 
-
-        
-        __apply_water_mark(fig, r"E:/Projects/atmoz/atmoz/assets/watermarks/Watermark_TOLNet.png")
-        __add_plot_params(ax, params)
+        watermark_filepath = r"E:/Projects/atmoz/atmoz/assets/watermarks/Watermark_TOLNet.png"
+        plot_utilities.__apply_water_mark(fig, watermark_filepath)
+        plot_utilities.__add_plot_params(ax, params)
+        plot_utilities.__apply_datetime_axis(ax)
         
 
         plt.show()
+
 
 
 params = {
@@ -1019,10 +898,6 @@ params = {
         "linewidth": 0.5
         },
 
-    "cbar.ax.tick_params": {
-        "labelsize": 12
-        },
-
     "set_ylims": [0, 15],
 
     "savefig": {
@@ -1035,22 +910,65 @@ params = {
 
     "layout": "tight",
 
-    "cbar.set_label": {
-        "label": "Ozone ($ppb_v$)", 
-        "size": 16, 
-        "weight": "bold"
-        },
-
-    "xaxis.set_major_locator": {
-        "locator": mdates.AutoDateLocator()
-        },
-
-    "xaxis.set_major_formatter": {
-        "formatter": mdates.ConciseDateFormatter(
-            mdates.AutoDateLocator()
-            )
-        }
     }
 
 tolnet_curtain_plot(data.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '40.89x-111.89')], **params)
 # %%
+
+import matplotlib as mpl
+import numpy as np
+from functools import cache
+
+
+# --------------------------
+# Factory functions
+# --------------------------
+@cache
+def tolnet_ozone():
+    ncolors = [
+        np.array([255, 140, 255]) / 255.0,
+        np.array([221, 111, 242]) / 255.0,
+        np.array([187, 82, 229]) / 255.0,
+        np.array([153, 53, 216]) / 255.0,
+        np.array([119, 24, 203]) / 255.0,
+        np.array([0, 0, 187]) / 255.0,
+        np.array([0, 44, 204]) / 255.0,
+        np.array([0, 88, 221]) / 255.0,
+        np.array([0, 132, 238]) / 255.0,
+        np.array([0, 165, 255]) / 255.0,
+        np.array([0, 235, 255]) / 255.0,
+        np.array([39, 255, 215]) / 255.0,
+        np.array([99, 255, 150]) / 255.0,
+        np.array([163, 255, 91]) / 255.0,
+        np.array([211, 255, 43]) / 255.0,
+        np.array([255, 255, 0]) / 255.0,
+        np.array([250, 200, 0]) / 255.0,
+        np.array([255, 159, 0]) / 255.0,
+        np.array([255, 111, 0]) / 255.0,
+        np.array([255, 63, 0]) / 255.0,
+        np.array([255, 0, 0]) / 255.0,
+        np.array([216, 0, 15]) / 255.0,
+        np.array([178, 0, 31]) / 255.0,
+        np.array([140, 0, 47]) / 255.0,
+        np.array([102, 0, 63]) / 255.0,
+        np.array([200, 200, 200]) / 255.0,
+        np.array([140, 140, 140]) / 255.0,
+        np.array([80, 80, 80]) / 255.0,
+        np.array([52, 52, 52]) / 255.0,
+        np.array([0, 0, 0]),
+    ]
+    cmap = mpl.colors.ListedColormap(ncolors)
+    cmap.set_under([1, 1, 1])
+    cmap.set_over([0, 0, 0])
+    bounds = [0.001, *np.arange(5, 121, 5), 150, 200, 300, 600]
+    norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
+    return cmap, norm
+
+
+def apply_colorbar(fig, ax, colorbar, **kwargs):
+    cmap, norm = colorbar
+    cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 121, 10), 150, 200, 300, 600])
+    cbar.set_label(label=params["cbar_label"], size=16, weight="bold")
+
+    cbar.ax.tick_params(labelsize=params["fontsize_ticks"])
+    return ax.figure.colorbar(mappable, ax=ax, **kwargs)
