@@ -261,24 +261,26 @@ class utilities:
         return
     
     def _apply_time_axis(self, ax, major="Day", major_interval=7, minor="Day",
-                     minor_interval=1, auto=False, date_format=None):
+                     minor_interval=1, auto=True, date_format=None):
         """Apply time-axis formatting to an Axes."""
+
         locator_map = {
             "Year": mdates.YearLocator,
             "Month": mdates.MonthLocator,
             "Day": mdates.DayLocator,
             "Hour": mdates.HourLocator,
             "Minute": mdates.MinuteLocator,
+            "Auto": mdates.AutoDateLocator,
         }
 
         if auto:
             locator = mdates.AutoDateLocator()
             ax.xaxis.set_major_locator(locator)
-            ax.xaxis.set_major_formatter(
-                mdates.DateFormatter(date_format) if date_format else mdates.AutoDateFormatter(locator)
-            )
+            ax.xaxis.set_major_formatter(mdates.ConciseDateConverter(locator))
         else:
-            ax.xaxis.set_major_locator(locator_map[major](interval=major_interval))
+            ax.xaxis.set_major_locator(locator_map[major](
+                interval=major_interval,
+                nbins=max_major_))
             ax.xaxis.set_minor_locator(locator_map[minor](interval=minor_interval))
             ax.xaxis.set_major_formatter(
                 mdates.DateFormatter(date_format) if date_format
@@ -843,8 +845,61 @@ translator = str.maketrans({c: "_" for c in string.punctuation})
 import matplotlib.pyplot as plt
 
 
+def __apply_water_mark(fig, filepath, **kwargs):
+    params = {
+        "add_axes": {
+            "rect": [0.12, 0.73, 0.3, 0.15],
+            "anchor": "SW",
+            "zorder": 10
+        }
+    }
+    params = merge_dicts(params, kwargs)
+    with open(filepath, "rb") as file:
+            im = image.imread(file)
+    ax_wm = fig.add_axes(**params["add_axes"])
+    ax_wm.imshow(im, alpha=0.7)
+    ax_wm.axis('off')
+    return fig
+
+def __add_plot_params(ax, params: dict):
+    for func_name, kwargs in params.items():
+        target = getattr(ax, func_name, None) or getattr(plt, func_name, None)
+        if callable(target):
+            if isinstance(kwargs, dict):
+                target(**kwargs)
+            elif isinstance(kwargs, (list, tuple)):
+                target(*kwargs)
+            else:
+                target(kwargs)  # single scalar
+    return 
+
+def __apply_near_real_time(ax, **kwargs):
+    params = {
+        "s": 'NRT DATA. NOT CITABLE.',
+        "fontsize": 30,
+        "color": "black",
+        "ha": "center",
+        "va": "center",
+        "rotation": 25,
+        "transform": ax.transAxes,
+        "alpha": 0.5 
+        }
+    params = merge_dicts(params, kwargs)
+    
+    ax.text(0.3, 0.5, , transform=ax.transAxes,
+            fontsize=30, color='black', alpha=0.5,
+            ha='center', va='center', rotation=25
+            )
+    
+    ax.text(0.7, 0.5, 'NRT DATA. NOT CITABLE.', transform=ax.transAxes,
+        fontsize=30, color='black', alpha=0.5,
+        ha='center', va='center', rotation=25
+        )
+    
+    return 
+
 def tolnet_curtain_plot(data: dict, **kwargs):
-    default = params = {
+    default = {
         "set_ylabel": {
             "ylabel": "Altitude (km ASL)"
             },
@@ -930,59 +985,20 @@ def tolnet_curtain_plot(data: dict, **kwargs):
 
         cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 121, 10), 150, 200, 300, 600])
 
-        with open(r"E:/Projects/atmoz/atmoz/assets/watermarks/TOLNet.png", "rb") as file:
-            im = image.imread(file)
 
-        ax_wm = fig.add_axes([0.12, 0.73, 0.3, 0.15], anchor='SW', zorder=10)
-        ax_wm.imshow(im, alpha=0.7)
-        ax_wm.axis('off')
-
-        for i in np.arange(0.3, 1, 0.4):
-            ax.text(i, 0.5, 'NRT DATA. NOT CITABLE.', transform=ax.transAxes,
-                    fontsize=30, color='black', alpha=0.5,
-                    ha='center', va='center', rotation=25
-                    )
-        if params:
-            for func_name, kwargs in params.items():
-                target = getattr(ax, func_name, None) or getattr(plt, func_name, None)
-                if callable(target):
-                    if isinstance(kwargs, dict):
-                        target(**kwargs)
-                    elif isinstance(kwargs, (list, tuple)):
-                        target(*kwargs)
-                    else:
-                        target(kwargs)  # single scalar
         
-        utilities()._apply_time_axis(ax, major="Hour", major_interval=2, minor="Minute", minor_interval=30)
-
+        __apply_water_mark(fig, r"E:/Projects/atmoz/atmoz/assets/watermarks/Watermark_TOLNet.png")
+        __add_plot_params(ax, params)
+        
 
         plt.show()
-
-def my_plot(x, y, plot_kwargs=None, params=None):
-    fig, ax = plt.subplots()
-    
-    # plotting
-    ax.plot(x, y, **(plot_kwargs or {}))
-    
-    # apply "params" settings
-    if params:
-        for func_name, kwargs in params.items():
-            target = getattr(ax, func_name, None) or getattr(plt, func_name, None)
-            if callable(target):
-                if isinstance(kwargs, dict):
-                    target(**kwargs)
-                elif isinstance(kwargs, (list, tuple)):
-                    target(*kwargs)
-                else:
-                    target(kwargs)  # single scalar
-
-    return fig, ax
 
 
 params = {
     "set_ylabel": {
         "ylabel": "Altitude (km ASL)"
         },
+
     "set_yticks": {
         "ticks": np.arange(0, 16, 1)
         },
@@ -1008,6 +1024,7 @@ params = {
         },
 
     "set_ylims": [0, 15],
+
     "savefig": {
         "fname": "test.png",
         "dpi": 300,
@@ -1017,15 +1034,23 @@ params = {
         },
 
     "layout": "tight",
+
     "cbar.set_label": {
         "label": "Ozone ($ppb_v$)", 
         "size": 16, 
         "weight": "bold"
+        },
+
+    "xaxis.set_major_locator": {
+        "locator": mdates.AutoDateLocator()
+        },
+
+    "xaxis.set_major_formatter": {
+        "formatter": mdates.ConciseDateFormatter(
+            mdates.AutoDateLocator()
+            )
         }
     }
 
-
-# ax = my_plot([1,2,3], [2,4,6], plot_kwargs={"color": "red"}, params=params)
-# plt.show()
-
 tolnet_curtain_plot(data.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '40.89x-111.89')], **params)
+# %%
