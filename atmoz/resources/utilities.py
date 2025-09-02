@@ -32,3 +32,15 @@ def get_asset(filename: str) -> Path:
         return resources.files(package).joinpath(filename)
     except FileNotFoundError:
         raise FileNotFoundError(f"Asset '{filename}' not found in package '{package}'")
+    
+def merge_dicts(default, override):
+    """Recursively merge two dictionaries. Override values replace defaults."""
+    result = default.copy()
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(result.get(k), dict):
+            # merge nested dicts
+            result[k] = merge_dicts(result.get(k, {}), v)
+        else:
+            # override or add new key
+            result[k] = v
+    return result
