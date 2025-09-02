@@ -39,6 +39,8 @@ import importlib.resources as resources
 from pathlib import Path
 from typing import Union
 
+from atmoz.resources.utilities import merge_dicts
+
 
 #%% Classes
 
@@ -450,7 +452,7 @@ class TOLNet(utilities):
             "ytick.major.width": 1,
 
             # Figure size (optional)
-            "figure.figsize": (15, 6),
+            "figure.figsize": (20, 6),
 
             # Fonts
             "font.family": "Courier New",
@@ -827,47 +829,203 @@ if __name__ == "__main__":
 
 #%%
 
-params = {
-        "ylabel": "Altitude (km ASL)",
-        "xlabel": "Datetime (UTC)",
-        "fontsize_label": 18,
-        "fontsize_ticks": 16,
-        "fontsize_title": 20,
-        "title": {
+
+
+translator = str.maketrans({c: "_" for c in string.punctuation})
+
+#%%
+
+# tolnet.tolnet_curtain_plot(data.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '40.89x-111.89')], **params)
+
+
+#%% 
+
+import matplotlib.pyplot as plt
+
+
+def tolnet_curtain_plot(data: dict, **kwargs):
+    default = params = {
+        "set_ylabel": {
+            "ylabel": "Altitude (km ASL)"
+            },
+
+        "set_xlabel": {
+            "xlabel": "Time"
+            },
+
+        "set_title": {
             "label": r"Ozone Mixing Ratio Profile",
             "fontsize": 16
-        },
-        "savefig": {
-            "fname": None,
-            "dpi": 300,
-            "transparent": True,
-            "format": "png",
-            "bbox_inches": "tight"
-        },
-        "ylims": [0, 15],
-        "yticks": np.arange(0, 15.1, 1),
-        "figsize": (30, 8),
-        "layout": "tight",
-        "cbar_label": "Ozone ($ppb_v$)",
-        "fontsize_cbar": 16,
-        "xlims": ["2024-08-08", "2024-08-09"],
+            },
+
         "grid": {
             "visible": True,
             "color": "gray",
             "linestyle": "--",
             "linewidth": 0.5
+            },
+
+        "cbar.ax.tick_params": {
+            "labelsize": 16
+            },
+
+        "set_ylims": [0, 15],
+        "savefig": {
+            "fname": "test.png",
+            "dpi": 300,
+            "transparent": True,
+            "format": "png",
+            "bbox_inches": "tight"
+            },
+
+        "layout": "tight",
+        "cbar.set_label": {
+            "label": "Ozone ($ppb_v$)", 
+            "size": 16, 
+            "weight": "bold"
+            }
+        }
+
+    params = merge_dicts(default, kwargs)
+    with plt.rc_context(tolnet.curtain_plot_theme):
+        fig, ax = plt.subplots()
+
+        xlims = params.get("xlims", "auto")
+        dates = sorted(list(data.keys()))
+
+        if xlims == "auto": 
+            pass   
+        elif isinstance(xlims, list): 
+            xlims = pd.to_datetime(xlims, utc=True)
+            xlims = [xlims.min(), xlims.max()]
+            dates = pd.to_datetime(dates, utc=True)
+            dates = [ str(x.strftime("%Y-%m-%d")) for x in dates[(dates >= xlims[0]) & (dates <= xlims[1])] ]
+
+        for date in dates:
+            if xlims == "auto": 
+                df = data[date].copy()
+            else:
+                df = data[date].copy()[xlims[0]:xlims[1]]
+
+            if df.empty:
+                continue
+
+            time_resolution = kwargs.get("time_resolution", "auto")
+
+            if time_resolution == "auto": 
+                resolution = np.min([df.index[i] - df.index[i-1] for i in range(1, len(df))])
+                df = df.resample(f"{resolution.seconds}s").mean()
+            else: 
+                df = df.resample(f"{time_resolution}").mean()
+
+            X, Y, Z = ( df.index, df.columns, df.to_numpy().T )
+
+            ncmap, nnorm = utilities().O3_curtain_colors
+
+            if params.get("use_countourf", False):
+                levels = nnorm.boundaries
+                im = ax.contourf(X, Y, Z, levels=levels, cmap=ncmap, norm=nnorm)
+            else:
+                im = ax.pcolormesh(X, Y, Z, cmap=ncmap, norm=nnorm, shading="nearest", alpha=1)
+
+        cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 121, 10), 150, 200, 300, 600])
+
+        with open(r"E:/Projects/atmoz/atmoz/assets/watermarks/TOLNet.png", "rb") as file:
+            im = image.imread(file)
+
+        ax_wm = fig.add_axes([0.12, 0.73, 0.3, 0.15], anchor='SW', zorder=10)
+        ax_wm.imshow(im, alpha=0.7)
+        ax_wm.axis('off')
+
+        for i in np.arange(0.3, 1, 0.4):
+            ax.text(i, 0.5, 'NRT DATA. NOT CITABLE.', transform=ax.transAxes,
+                    fontsize=30, color='black', alpha=0.5,
+                    ha='center', va='center', rotation=25
+                    )
+        if params:
+            for func_name, kwargs in params.items():
+                target = getattr(ax, func_name, None) or getattr(plt, func_name, None)
+                if callable(target):
+                    if isinstance(kwargs, dict):
+                        target(**kwargs)
+                    elif isinstance(kwargs, (list, tuple)):
+                        target(*kwargs)
+                    else:
+                        target(kwargs)  # single scalar
+        
+        utilities()._apply_time_axis(ax, major="Hour", major_interval=2, minor="Minute", minor_interval=30)
+
+
+        plt.show()
+
+def my_plot(x, y, plot_kwargs=None, params=None):
+    fig, ax = plt.subplots()
+    
+    # plotting
+    ax.plot(x, y, **(plot_kwargs or {}))
+    
+    # apply "params" settings
+    if params:
+        for func_name, kwargs in params.items():
+            target = getattr(ax, func_name, None) or getattr(plt, func_name, None)
+            if callable(target):
+                if isinstance(kwargs, dict):
+                    target(**kwargs)
+                elif isinstance(kwargs, (list, tuple)):
+                    target(*kwargs)
+                else:
+                    target(kwargs)  # single scalar
+
+    return fig, ax
+
+
+params = {
+    "set_ylabel": {
+        "ylabel": "Altitude (km ASL)"
+        },
+    "set_yticks": {
+        "ticks": np.arange(0, 16, 1)
+        },
+
+    "set_xlabel": {
+        "xlabel": "Time"
+        },
+
+    "set_title": {
+        "label": r"Ozone Mixing Ratio Profile",
+        "fontsize": 16
+        },
+
+    "grid": {
+        "visible": True,
+        "color": "gray",
+        "linestyle": "--",
+        "linewidth": 0.5
+        },
+
+    "cbar.ax.tick_params": {
+        "labelsize": 12
+        },
+
+    "set_ylims": [0, 15],
+    "savefig": {
+        "fname": "test.png",
+        "dpi": 300,
+        "transparent": True,
+        "format": "png",
+        "bbox_inches": "tight"
+        },
+
+    "layout": "tight",
+    "cbar.set_label": {
+        "label": "Ozone ($ppb_v$)", 
+        "size": 16, 
+        "weight": "bold"
         }
     }
 
-translator = str.maketrans({c: "_" for c in string.punctuation})
 
+# ax = my_plot([1,2,3], [2,4,6], plot_kwargs={"color": "red"}, params=params)
+# plt.show()
 
-
-
-#%%
-
-
-
-
-
-tolnet.tolnet_curtain_plot(data.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '40.89x-111.89')], **params)
+tolnet_curtain_plot(data.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '40.89x-111.89')], **params)
