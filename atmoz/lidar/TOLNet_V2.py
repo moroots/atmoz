@@ -38,6 +38,7 @@ from typing import Union
 
 from atmoz.resources.useful_functions import merge_dicts
 
+
 class filter_files:
     def __init__(self, df, ptypes):
         self.df = df
@@ -667,82 +668,82 @@ class TOLNet(utilities):
         img = Image.open(path).convert("RGBA")  # ensure alpha channel
         return np.array(img)
 
-    def tolnet_curtain_plot(self, data: dict, **kwargs):
-        with plt.rc_context(self.curtain_plot_theme):
-            fig, ax = plt.subplots()
-            self._apply_time_axis(ax, major="Hour", major_interval=2, minor="Minute", minor_interval=30)
+    # def tolnet_curtain_plot(self, data: dict, **kwargs):
+    #     with plt.rc_context(self.curtain_plot_theme):
+    #         fig, ax = plt.subplots()
+    #         self._apply_time_axis(ax, major="Hour", major_interval=2, minor="Minute", minor_interval=30)
 
-            xlims = kwargs.get("xlims", "auto")
-            dates = sorted(list(data.keys()))
+    #         xlims = kwargs.get("xlims", "auto")
+    #         dates = sorted(list(data.keys()))
 
-            if xlims == "auto": 
-                pass   
-            elif isinstance(xlims, list): 
-                xlims = pd.to_datetime(xlims, utc=True)
-                xlims = [xlims.min(), xlims.max()]
-                dates = pd.to_datetime(dates, utc=True)
-                dates = [ str(x.strftime("%Y-%m-%d")) for x in dates[(dates >= xlims[0]) & (dates <= xlims[1])] ]
+    #         if xlims == "auto": 
+    #             pass   
+    #         elif isinstance(xlims, list): 
+    #             xlims = pd.to_datetime(xlims, utc=True)
+    #             xlims = [xlims.min(), xlims.max()]
+    #             dates = pd.to_datetime(dates, utc=True)
+    #             dates = [ str(x.strftime("%Y-%m-%d")) for x in dates[(dates >= xlims[0]) & (dates <= xlims[1])] ]
 
-            for date in dates:
-                df = data[date].copy()[xlims[0]:xlims[1]]
-                if df.empty:
-                    continue
+    #         for date in dates:
+    #             df = data[date].copy()[xlims[0]:xlims[1]]
+    #             if df.empty:
+    #                 continue
 
-                time_resolution = kwargs.get("time_resolution", "auto")
+    #             time_resolution = kwargs.get("time_resolution", "auto")
 
-                if time_resolution == "auto": 
-                    resolution = np.min([df.index[i] - df.index[i-1] for i in range(1, len(df))])
-                    df = df.resample(f"{resolution.seconds}s").mean()
-                else: 
-                    df = df.resample(f"{time_resolution}").mean()
+    #             if time_resolution == "auto": 
+    #                 resolution = np.min([df.index[i] - df.index[i-1] for i in range(1, len(df))])
+    #                 df = df.resample(f"{resolution.seconds}s").mean()
+    #             else: 
+    #                 df = df.resample(f"{time_resolution}").mean()
 
-                X, Y, Z = ( df.index, df.columns, df.to_numpy().T )
+    #             X, Y, Z = ( df.index, df.columns, df.to_numpy().T )
 
-                ncmap, nnorm = self.O3_curtain_colors
+    #             ncmap, nnorm = self.O3_curtain_colors
 
-                if kwargs.get("use_countourf", False):
-                    levels = nnorm.boundaries
-                    im = ax.contourf(X, Y, Z, levels=levels, cmap=ncmap, norm=nnorm)
-                else:
-                    im = ax.pcolormesh(X, Y, Z, cmap=ncmap, norm=nnorm, shading="nearest", alpha=1)
+    #             if kwargs.get("use_countourf", False):
+    #                 levels = nnorm.boundaries
+    #                 im = ax.contourf(X, Y, Z, levels=levels, cmap=ncmap, norm=nnorm)
+    #             else:
+    #                 im = ax.pcolormesh(X, Y, Z, cmap=ncmap, norm=nnorm, shading="nearest", alpha=1)
 
-            cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 121, 10), 150, 200, 300, 600])
-            cbar.set_label(label=params["cbar_label"], size=16, weight="bold")
+    #         cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 121, 10), 150, 200, 300, 600])
+    #         cbar.set_label(label=params["cbar_label"], size=16, weight="bold")
 
-            cbar.ax.tick_params(labelsize=params["fontsize_ticks"])
-            plt.title(**params["title"])
+    #         cbar.ax.tick_params(labelsize=params["fontsize_ticks"])
+    #         plt.title(**params["title"])
 
-            ax.set_ylabel(params["ylabel"], fontsize=params["fontsize_label"])
-            ax.set_xlabel(params["xlabel"], fontsize=params["fontsize_label"])
+    #         ax.set_ylabel(params["ylabel"], fontsize=params["fontsize_label"])
+    #         ax.set_xlabel(params["xlabel"], fontsize=params["fontsize_label"])
 
-            xlims = params.get("xlims", None)
-            if xlims:
-                xlims = [np.datetime64(x) for x in xlims]
-                ax.set_xlim(xlims)
+    #         xlims = params.get("xlims", None)
+    #         if xlims:
+    #             xlims = [np.datetime64(x) for x in xlims]
+    #             ax.set_xlim(xlims)
 
-            ax.set_yticks(params["yticks"])
+    #         ax.set_yticks(params["yticks"])
 
 
-            ax.set_ylim(params["ylims"])
+    #         ax.set_ylim(params["ylims"])
 
-            if params["savefig"]["fname"]:
-                plt.savefig(**params["savefig"])
+    #         if params["savefig"]["fname"]:
+    #             plt.savefig(**params["savefig"])
 
             
-            with open(r"E:/Projects/atmoz/atmoz/assets/watermarks/TOLNet.png", "rb") as file:
-                im = image.imread(file)
+    #         with open(r"E:/Projects/atmoz/atmoz/assets/watermarks/TOLNet.png", "rb") as file:
+    #             im = image.imread(file)
 
-            ax_wm = fig.add_axes([0.12, 0.73, 0.3, 0.15], anchor='SW', zorder=10)
-            ax_wm.imshow(im, alpha=0.7)
-            ax_wm.axis('off')
+    #         ax_wm = fig.add_axes([0.12, 0.73, 0.3, 0.15], anchor='SW', zorder=10)
+    #         ax_wm.imshow(im, alpha=0.7)
+    #         ax_wm.axis('off')
 
-            for i in np.arange(0.3, 1, 0.4):
-                ax.text(i, 0.5, 'NRT DATA. NOT CITABLE.', transform=ax.transAxes,
-                        fontsize=30, color='black', alpha=0.5,
-                        ha='center', va='center', rotation=25
-                        )
+    #         for i in np.arange(0.3, 1, 0.4):
+    #             ax.text(i, 0.5, 'NRT DATA. NOT CITABLE.', transform=ax.transAxes,
+    #                     fontsize=30, color='black', alpha=0.5,
+    #                     ha='center', va='center', rotation=25
+    #                     )
 
-            plt.show()
+    #         plt.show()
 
 if __name__ == "__main__":
     tolnet = TOLNet()
@@ -770,26 +771,80 @@ translator = str.maketrans({c: "_" for c in string.punctuation})
 
 #%% 
 
+import matplotlib as mpl
+import numpy as np
+from functools import cache
+
 import matplotlib.pyplot as plt
 from atmoz.resources import plot_utilities
 from atmoz.resources import useful_functions
 
+@cache
+def tolnet_ozone():
+    ncolors = [
+        np.array([255, 140, 255]) / 255.0,
+        np.array([221, 111, 242]) / 255.0,
+        np.array([187, 82, 229]) / 255.0,
+        np.array([153, 53, 216]) / 255.0,
+        np.array([119, 24, 203]) / 255.0,
+        np.array([0, 0, 187]) / 255.0,
+        np.array([0, 44, 204]) / 255.0,
+        np.array([0, 88, 221]) / 255.0,
+        np.array([0, 132, 238]) / 255.0,
+        np.array([0, 165, 255]) / 255.0,
+        np.array([0, 235, 255]) / 255.0,
+        np.array([39, 255, 215]) / 255.0,
+        np.array([99, 255, 150]) / 255.0,
+        np.array([163, 255, 91]) / 255.0,
+        np.array([211, 255, 43]) / 255.0,
+        np.array([255, 255, 0]) / 255.0,
+        np.array([250, 200, 0]) / 255.0,
+        np.array([255, 159, 0]) / 255.0,
+        np.array([255, 111, 0]) / 255.0,
+        np.array([255, 63, 0]) / 255.0,
+        np.array([255, 0, 0]) / 255.0,
+        np.array([216, 0, 15]) / 255.0,
+        np.array([178, 0, 31]) / 255.0,
+        np.array([140, 0, 47]) / 255.0,
+        np.array([102, 0, 63]) / 255.0,
+        np.array([200, 200, 200]) / 255.0,
+        np.array([140, 140, 140]) / 255.0,
+        np.array([80, 80, 80]) / 255.0,
+        np.array([52, 52, 52]) / 255.0,
+        np.array([0, 0, 0]),
+        ]
+    
+    cmap = mpl.colors.ListedColormap(ncolors)
+    cmap.set_under([1, 1, 1])
+    cmap.set_over([0, 0, 0])
+    bounds = [0.001, *np.arange(5, 121, 5), 150, 200, 300, 600]
+    norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
+    return cmap, norm
+
+def apply_colorbar(fig, ax, mappable, colorbar, **kwargs):
+    cmap, norm = colorbar()
+    params = useful_functions.merge_dicts(params, kwargs)
+    cbar = fig.colorbar(mappable, ax=ax, **params)
+    cbar.set_label(label="Ozone", size=16, weight="bold")
+    cbar.ax.tick_params(labelsize=16)
+    return fig, ax
+
 def tolnet_curtain_plot(data: dict, **kwargs):
     default = {
-        "set_ylabel": {
+        "ax.set_ylabel": {
             "ylabel": "Altitude (km ASL)"
             },
 
-        "set_xlabel": {
+        "ax.set_xlabel": {
             "xlabel": "Time"
             },
 
-        "set_title": {
+        "ax.set_title": {
             "label": r"Ozone Mixing Ratio Profile",
             "fontsize": 16
             },
 
-        "grid": {
+        "ax.grid": {
             "visible": True,
             "color": "gray",
 
@@ -797,12 +852,9 @@ def tolnet_curtain_plot(data: dict, **kwargs):
             "linewidth": 0.5
             },
 
-        "cbar.ax.tick_params": {
-            "labelsize": 16
-            },
+        "ax.set_ylims": [0, 15],
 
-        "set_ylims": [0, 15],
-        "savefig": {
+        "fig.savefig": {
             "fname": "test.png",
             "dpi": 300,
             "transparent": True,
@@ -810,12 +862,8 @@ def tolnet_curtain_plot(data: dict, **kwargs):
             "bbox_inches": "tight"
             },
 
-        "layout": "tight",
-        "cbar.set_label": {
-            "label": "Ozone ($ppb_v$)", 
-            "size": 16, 
-            "weight": "bold"
-            }
+        "fig.layout": "tight",
+
         }
 
     params = useful_functions.merge_dicts(default, kwargs)
@@ -853,54 +901,59 @@ def tolnet_curtain_plot(data: dict, **kwargs):
 
             X, Y, Z = ( df.index, df.columns, df.to_numpy().T )
 
-            ncmap, nnorm = utilities().O3_curtain_colors
+            # ncmap, nnorm = utilities().O3_curtain_colors
+            cmap, norm = tolnet_ozone()
 
             if params.get("use_countourf", False):
-                levels = nnorm.boundaries
-                im = ax.contourf(X, Y, Z, levels=levels, cmap=ncmap, norm=nnorm)
+                levels = norm.boundaries
+                im = ax.contourf(X, Y, Z, levels=levels, cmap=cmap, norm=norm)
             else:
-                im = ax.pcolormesh(X, Y, Z, cmap=ncmap, norm=nnorm, shading="nearest", alpha=1)
-
-        cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 121, 10), 150, 200, 300, 600])
+                im = ax.pcolormesh(X, Y, Z, cmap=cmap, norm=norm, shading="nearest", alpha=1)
 
         watermark_filepath = r"E:/Projects/atmoz/atmoz/assets/watermarks/Watermark_TOLNet.png"
-        plot_utilities.__apply_water_mark(fig, watermark_filepath)
-        plot_utilities.__add_plot_params(ax, params)
-        plot_utilities.__apply_datetime_axis(ax)
         
+    
+        params["fig.colorbar"]["mappable"] = im
+        # params["fig.colorbar"]["ax"] = ax
+        fig, ax, results = plot_utilities.apply_plot_params(fig, ax, params)
 
+        # watermark_ax = plot_utilities.__apply_watermark(fig, watermark_filepath)
+        # ax = plot_utilities.__apply_datetime_axis(ax)
+        
+        
+        
         plt.show()
 
 
 
 params = {
-    "set_ylabel": {
+    "ax.set_ylabel": {
         "ylabel": "Altitude (km ASL)"
         },
 
-    "set_yticks": {
+    "ax.set_yticks": {
         "ticks": np.arange(0, 16, 1)
         },
 
-    "set_xlabel": {
+    "ax.set_xlabel": {
         "xlabel": "Time"
         },
 
-    "set_title": {
+    "ax.set_title": {
         "label": r"Ozone Mixing Ratio Profile",
         "fontsize": 16
         },
 
-    "grid": {
+    "ax.grid": {
         "visible": True,
         "color": "gray",
         "linestyle": "--",
         "linewidth": 0.5
         },
 
-    "set_ylims": [0, 15],
+    "ax.set_ylims": [0, 15],
 
-    "savefig": {
+    "fig.savefig": {
         "fname": "test.png",
         "dpi": 300,
         "transparent": True,
@@ -908,67 +961,29 @@ params = {
         "bbox_inches": "tight"
         },
 
-    "layout": "tight",
+    "fig.layout": "tight",
 
+    "fig.colorbar": {
+        "pad": 0.01, 
+        "ticks": [0.001, *np.arange(10, 121, 10), 150, 200, 300, 600],
+        "sub_functions": {
+            "set_label": {
+                "label": "Ozone Mixing Ration ($ppb_v$)",
+                "weight": "bold",
+                "size": 16
+                },
+                    
+            "ax.tick_params": {
+                "labelsize": 16
+                }
+            }
+        },
     }
 
 tolnet_curtain_plot(data.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '40.89x-111.89')], **params)
 # %%
 
-import matplotlib as mpl
-import numpy as np
-from functools import cache
 
 
-# --------------------------
-# Factory functions
-# --------------------------
-@cache
-def tolnet_ozone():
-    ncolors = [
-        np.array([255, 140, 255]) / 255.0,
-        np.array([221, 111, 242]) / 255.0,
-        np.array([187, 82, 229]) / 255.0,
-        np.array([153, 53, 216]) / 255.0,
-        np.array([119, 24, 203]) / 255.0,
-        np.array([0, 0, 187]) / 255.0,
-        np.array([0, 44, 204]) / 255.0,
-        np.array([0, 88, 221]) / 255.0,
-        np.array([0, 132, 238]) / 255.0,
-        np.array([0, 165, 255]) / 255.0,
-        np.array([0, 235, 255]) / 255.0,
-        np.array([39, 255, 215]) / 255.0,
-        np.array([99, 255, 150]) / 255.0,
-        np.array([163, 255, 91]) / 255.0,
-        np.array([211, 255, 43]) / 255.0,
-        np.array([255, 255, 0]) / 255.0,
-        np.array([250, 200, 0]) / 255.0,
-        np.array([255, 159, 0]) / 255.0,
-        np.array([255, 111, 0]) / 255.0,
-        np.array([255, 63, 0]) / 255.0,
-        np.array([255, 0, 0]) / 255.0,
-        np.array([216, 0, 15]) / 255.0,
-        np.array([178, 0, 31]) / 255.0,
-        np.array([140, 0, 47]) / 255.0,
-        np.array([102, 0, 63]) / 255.0,
-        np.array([200, 200, 200]) / 255.0,
-        np.array([140, 140, 140]) / 255.0,
-        np.array([80, 80, 80]) / 255.0,
-        np.array([52, 52, 52]) / 255.0,
-        np.array([0, 0, 0]),
-    ]
-    cmap = mpl.colors.ListedColormap(ncolors)
-    cmap.set_under([1, 1, 1])
-    cmap.set_over([0, 0, 0])
-    bounds = [0.001, *np.arange(5, 121, 5), 150, 200, 300, 600]
-    norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
-    return cmap, norm
 
 
-def apply_colorbar(fig, ax, colorbar, **kwargs):
-    cmap, norm = colorbar
-    cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 121, 10), 150, 200, 300, 600])
-    cbar.set_label(label=params["cbar_label"], size=16, weight="bold")
-
-    cbar.ax.tick_params(labelsize=params["fontsize_ticks"])
-    return ax.figure.colorbar(mappable, ax=ax, **kwargs)

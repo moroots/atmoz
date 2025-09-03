@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sun Aug 31 09:34:20 2025
+
+@author: Maurice Roots
+"""
+
+import numpy as np
+
 def tolnet():
     ncolors = [
         np.array([255, 140, 255]) / 255.0,
@@ -38,9 +47,9 @@ def tolnet():
     norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
     return cmap, norm
 
-def apply_colorbar(ax, mappable, name: str, **kwargs):
-    """Attach a registered colorbar to an axes."""
-    cmap, norm = get_colorbar(name)
-    mappable.set_cmap(cmap)
-    mappable.set_norm(norm)
-    return ax.figure.colorbar(mappable, ax=ax, **kwargs)
+# def apply_colorbar(ax, mappable, name: str, **kwargs):
+#     """Attach a registered colorbar to an axes."""
+#     cmap, norm = get_colorbar(name)
+#     mappable.set_cmap(cmap)
+#     mappable.set_norm(norm)
+#     return ax.figure.colorbar(mappable, ax=ax, **kwargs)
