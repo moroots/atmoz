@@ -14,7 +14,7 @@ import matplotlib.image as mimg
 from atmoz.resources import useful_functions
 import matplotlib.dates as mdates
 
-def __apply_watermark(fig, filepath, **kwargs):
+def apply_watermark(fig, filepath, **kwargs):
     params = {
         "add_axes": {
             "rect": [0.12, 0.73, 0.3, 0.15],
@@ -31,116 +31,87 @@ def __apply_watermark(fig, filepath, **kwargs):
     ax_wm.axis('off')
     return ax_wm
 
-def apply_plot_params(fig, ax, params: Dict[str, Any], obj: Optional[Any] = None) -> Dict[str, Any]:
+def apply_plot_params(fig, ax, **params):
     """
-    Recursively apply plotting parameters from a nested dictionary
-    to Matplotlib objects (Axes, Figure, Colorbar, etc.).
+    Apply a set of plotting parameters to a Matplotlib Axes or pyplot function.
 
-    This function supports dotted names (e.g., ``"fig.colorbar"``,
-    ``"cbar.ax.tick_params"``) to traverse attributes and call
-    methods with specified keyword arguments.
+    This function takes a dictionary of function names and their arguments,
+    looks up the corresponding callable either on the given Axes instance (`ax`)
+    or in the global pyplot (`plt`) namespace, and calls it with the provided
+    arguments.
 
     Parameters
     ----------
-    ax : matplotlib.axes.Axes
-        Target axes object.
     fig : matplotlib.figure.Figure
-        Target figure object.
-    params : dict
-        Nested dictionary specifying method names and their kwargs.
-        Each entry should be of the form::
+        The figure object associated with the plot. Returned unchanged.
+    ax : matplotlib.axes.Axes
+        The target axes object to which most plotting parameters will be applied.
+    **params : dict
+        A mapping of function names to argument specifications. Each key is the
+        name of a method or function (string), and each value is one of:
+        
+        - dict : passed as keyword arguments to the target function
+        - list or tuple : passed as positional arguments
+        - any other value : passed as a single positional argument
 
-            {
-                "fig.colorbar": {
-                    "pad": 0.01,
-                    "ticks": [...],
-                    "sub_functions": {
-                        "set_label": {"label": "Ozone", "size": 16},
-                        "ax.tick_params": {"labelsize": 16}
-                    }
-                }
-            }
-
-    obj : object, optional
-        Current target object (used during recursion).
-        Defaults to resolving from ``ax`` or ``fig``.
+        Example
+        -------
+        >>> params = {
+        ...     "set_title": {"label": "Example Plot", "fontsize": 14},
+        ...     "set_xlabel": "Time (s)",
+        ...     "grid": {"visible": True, "linestyle": "--"}
+        ... }
+        >>> fig, ax = __apply_plot_params(fig, ax, **params)
 
     Returns
     -------
-    results : dict
-        Dictionary mapping function names to their return values.
+    fig : matplotlib.figure.Figure
+        The same figure object, unchanged.
+    ax : matplotlib.axes.Axes
+        The same axes object, after modifications.
 
     Notes
     -----
-    - Does not modify the input ``params`` dict.
-    - If a function cannot be resolved or called, it is skipped.
-    - ``sub_functions`` allows recursive calls on the returned object.
-
-    Examples
-    --------
-    >>> fig, ax = plt.subplots()
-    >>> params = {
-    ...     "fig.colorbar": {
-    ...         "pad": 0.01,
-    ...         "ticks": [0, 1, 2],
-    ...         "sub_functions": {
-    ...             "set_label": {"label": "Example", "size": 12}
-    ...         }
-    ...     }
-    ... }
-    >>> apply_plot_params(ax, fig, params)
+    - The function first checks for the given function name on the Axes object.
+      If not found, it falls back to checking `matplotlib.pyplot`.
+    - Only callables are executed; missing or non-callable attributes are skipped.
     """
-    results = {}
+
+    def __call_attr(target, kwargs): 
+        if callable(target):
+            if isinstance(kwargs, dict):
+                result = target(**kwargs)
+            elif isinstance(kwargs, (list, tuple)):
+                result = target(*kwargs)
+            else:
+                result = target(kwargs) 
+        else: 
+            return None
+        
+        return result
 
     for func_name, kwargs in params.items():
-        # Split dotted path
-        parts = func_name.split(".")
-        target = obj
+        obj, attr = func_name.split(".")
+        if obj == "ax":
+            target = getattr(ax, attr, None)
+        elif obj == "fig":
+            target = getattr(fig, attr, None)
 
-        # Resolve top-level object
-        if target is None:
-            if parts[0] == "ax":
-                target, parts = ax, parts[1:]
-            elif parts[0] == "fig":
-                target, parts = fig, parts[1:]
+        if target is not None: 
+            if isinstance(kwargs, dict) and "sub_functions" in kwargs.keys(): 
+                sub_functions = kwargs.pop("sub_functions", {})
+                result = __call_attr(target, kwargs)
+                for sub_func_name, sub_func_kwargs in sub_functions.items():
+                    sub_target = getattr(result, sub_func_name, None)
+                    __call_attr(sub_target, sub_func_kwargs)
             else:
-                raise ValueError(f"Cannot resolve target for {func_name}")
+                result = __call_attr(target, kwargs)
 
-        # Traverse attributes
-        for attr in parts:
-            target = getattr(target, attr, None)
-            if attr == "colorbar":
-                print(target, attr)
-            if target is None:
-                break
-
-        if target is None or not callable(target):
-            continue
-
-        # Extract sub-functions
-        call_kwargs = copy.deepcopy(kwargs) if isinstance(kwargs, dict) else kwargs
-        sub_funcs = None
-        if isinstance(call_kwargs, dict):
-            sub_funcs = call_kwargs.pop("sub_functions", None)
-
-        # Call the target function
-        if isinstance(call_kwargs, dict):
-            result = target(**call_kwargs)
-        elif isinstance(call_kwargs, (list, tuple)):
-            result = target(*call_kwargs)
-        else:
-            result = target(call_kwargs)
+    return fig, ax
 
 
-        # Recurse into sub-functions using the result as obj
-        # if sub_funcs and result is not None:
-        #     print(result)
-        #     _, _, sub_results = apply_plot_params(fig, ax, sub_funcs, obj=result)
 
-    return fig, ax, results
-
-
-def __apply_near_real_time(ax, **kwargs):
+def apply_near_real_time(ax, **kwargs):
     params = {
         "s": 'NRT DATA. NOT CITABLE.',
         "fontsize": 30,
@@ -159,7 +130,7 @@ def __apply_near_real_time(ax, **kwargs):
     
     return ax
 
-def __apply_datetime_axis(ax):
+def apply_datetime_axis(ax):
     locator = mdates.AutoDateLocator()
     formatter = mdates.ConciseDateFormatter(locator)
     formatter.formats = [

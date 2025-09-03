@@ -99,6 +99,7 @@ atmoz/.ipynb_checkpoints/
 .vscode/
 .history/
 *.code-workspace
+*.ipynb_checkpoints/
 
 # IntelliJ / JetBrains
 .idea/
