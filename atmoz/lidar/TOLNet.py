@@ -1,33 +1,44 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Nov 28 13:32:30 2023
+Created on Sat Aug 30 17:22:28 2025
 
-@author: Maurice Roots, Arthur Perng, John T. Sullivan
+@author: Maurice Roots
+
+A Module for Downloading and Plotting TOLNet Data
+
 """
 
-import requests
+# Math & Data
 import pandas as pd
 import numpy as np
-import datetime
 
+# Housekeeping
+import yaml
+import string
+import datetime
+import requests
+from dateutil import tz
+from pathlib import Path
+from typing import Union
+import importlib.resources as resources
+from functools import cached_property, cache
+
+# Plotting
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.units as munits
 
-from dateutil import tz
-
+# Multi-Threading
 from tqdm import tqdm
-
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import string
+# Internal
+from atmoz.resources import debug, plot_utilities, useful_functions, colorbars, debug, default_plot_params
 
-# %% Function Space
-
-# pd.set_option('future.no_silent_downcasting', True) # Remove warning about future behavior
-
-
+# --------------------------------------------------------------------------------------------------------------------------------- #
+# Filtering Request Return
+# --------------------------------------------------------------------------------------------------------------------------------- #
 class filter_files:
     def __init__(self, df, ptypes):
         self.df = df
@@ -84,169 +95,7 @@ class filter_files:
         return self
 
 
-class utilities:
-    curtain_params = {
-                "ylabel": "Altitude (km ASL)",
-                "xlabel": "Datetime (UTC)",
-                "fontsize_label": 18,
-                "fontsize_ticks": 16,
-                "fontsize_title": 20,
-                "title": {
-                    "label": r"$O_3$ Mixing Ratio Profile",
-                    "fontsize": 16
-                },
-                "savefig": {
-                    "fname": None,
-                    "dpi": 300,
-                    "transparent": True,
-                    "format": "png",
-                    "bbox_inches": "tight"
-                },
-                "ylims": [0, 12],
-                "yticks": np.arange(0, 15.1, 1),
-                "figsize": (30, 8),
-                "layout": "tight",
-                "cbar_label": "Ozone ($ppb_v$)",
-                "fontsize_cbar": 16,
-                "xlims": ["2025-06-15", "2025-08-15"],
-                "grid": {
-                    "visible": True,
-                    "color": "gray",
-                    "linestyle": "--",
-                    "linewidth": 0.5
-                }
-            }
-
-    def __init__(self):
-        self.data = {}
-        self.troubleshoot = {}
-        return
-
-
-    def O3_curtain_colors(self):
-        """
-        Returns
-        -------
-        The color scheme used in the O3 curtain plots on the TOLNet website.
-
-        """
-        ncolors = [
-            np.array([255, 140, 255]) / 255.0,
-            np.array([221, 111, 242]) / 255.0,
-            np.array([187, 82, 229]) / 255.0,
-            np.array([153, 53, 216]) / 255.0,
-            np.array([119, 24, 203]) / 255.0,
-            np.array([0, 0, 187]) / 255.0,
-            np.array([0, 44, 204]) / 255.0,
-            np.array([0, 88, 221]) / 255.0,
-            np.array([0, 132, 238]) / 255.0,
-            np.array([0, 165, 255]) / 255.0,
-            np.array([0, 235, 255]) / 255.0,
-            np.array([39, 255, 215]) / 255.0,
-            np.array([99, 255, 150]) / 255.0,
-            np.array([163, 255, 91]) / 255.0,
-            np.array([211, 255, 43]) / 255.0,
-            np.array([255, 255, 0]) / 255.0,
-            np.array([250, 200, 0]) / 255.0,
-            np.array([255, 159, 0]) / 255.0,
-            np.array([255, 111, 0]) / 255.0,
-            np.array([255, 63, 0]) / 255.0,
-            np.array([255, 0, 0]) / 255.0,
-            np.array([216, 0, 15]) / 255.0,
-            np.array([178, 0, 31]) / 255.0,
-            np.array([140, 0, 47]) / 255.0,
-            np.array([102, 0, 63]) / 255.0,
-            np.array([200, 200, 200]) / 255.0,
-            np.array([140, 140, 140]) / 255.0,
-            np.array([80, 80, 80]) / 255.0,
-            np.array([52, 52, 52]) / 255.0,
-            np.array([0, 0, 0]),
-        ]
-
-        ncmap = mpl.colors.ListedColormap(ncolors)
-        ncmap.set_under([1, 1, 1])
-        ncmap.set_over([0, 0, 0])
-        bounds = [0.001, *np.arange(5, 110, 5), 120, 150, 200, 300, 600]
-        nnorm = mpl.colors.BoundaryNorm(bounds, ncmap.N)
-        return ncmap, nnorm
-
-    def _plot_settings(self, fig, ax, params, im):
-        cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 101, 10), 200, 300])
-        cbar.set_label(label=params["cbar_label"], size=16, weight="bold")
-
-        plt.setp(ax.get_xticklabels(), fontsize=params["fontsize_ticks"])
-        plt.setp(ax.get_yticklabels(), fontsize=params["fontsize_ticks"])
-
-        cbar.ax.tick_params(labelsize=params["fontsize_ticks"])
-        plt.title(params["title"], fontsize=params["fontsize_title"])
-
-        ax.set_ylabel(params["ylabel"], fontsize=params["fontsize_label"])
-        ax.set_xlabel(params["xlabel"], fontsize=params["fontsize_label"])
-
-        ax.set_xlim([np.datetime64(params["xlims"][0]), np.datetime64(params["xlims"][1])])
-
-        ax.set_yticks(params["yticks"])
-
-        ax.set_ylim(params["ylims"])
-
-        converter = mdates.ConciseDateConverter()
-        munits.registry[datetime.datetime] = converter
-        ax.xaxis_date()
-
-        if params["grid"]:
-            ax.grid(
-                color=params.get("grid_color", "gray"),
-                linestyle=params.get("grid_linestyle", "--"),
-                linewidth=params.get("grid_linewidth", 0.5),
-            )
-        return
-
-    def curtain_plot(self, X, Y, Z, use_countourf=False, **kwargs):
-        params = {
-            "ylabel": "Altitude (km ASL)",
-            "xlabel": "Datetime (UTC)",
-            "fontsize_label": 18,
-            "fontsize_ticks": 16,
-            "fontsize_title": 20,
-            "title": r"$O_3$ Mixing Ratio Profile",
-            "savefig": False,
-            "savename": None,
-            "ylims": [0, 15],
-            "xlims": [X[0], X[-1]],
-            "yticks": np.arange(0, 15.1, 0.5),
-            "figsize": (15, 8),
-            "layout": "tight",
-            "cbar_label": "Ozone ($ppb_v$)",
-            "fontsize_cbar": 16,
-            "grid": True,  # Add a parameter for grid
-        }
-
-        params.update(kwargs)
-        ncmap, nnorm = self.O3_curtain_colors()
-
-        fig, ax = kwargs.get("figure", (None, None))
-        if not fig or ax:
-            fig, ax = plt.subplots(1, 1, figsize=params["figsize"], layout=params["layout"])
-
-        if use_countourf:
-            levels = nnorm.boundaries
-            im = ax.contourf(X, Y, Z, levels=levels, cmap=ncmap, norm=nnorm)
-
-        else:
-            im = ax.pcolormesh(X, Y, Z, cmap=ncmap, norm=nnorm, shading="nearest", alpha=1)
-
-        if not fig or ax:
-            self._plot_settings(fig, ax, params, im)
-
-            if params["savename"]:
-                plt.savefig(params["savename"], dpi=350)
-
-            plt.show()
-
-        return
-
-
-class GEOS_CF(utilities):
+class GEOS_CF(debug.utilities):
     # https://dphttpdev01.nccs.nasa.gov/data-services/cfapi/assim/chm/v72/O3/39x-77/20230808/20230811
     # https://dphttpdev01.nccs.nasa.gov/data-services/cfapi/assim/met/v72/MET/39x-77/20230808/20230811
     def __init__(self, internal=True):
@@ -317,116 +166,11 @@ class GEOS_CF(utilities):
 
         return self
 
-
-class TOLNet(GEOS_CF):
+class TOLNet(debug.utilities):
     def __init__(self):
         super().__init__()
-        self.products = self.get_product_types()
-        self.file_types = self.get_file_types()
-        self.instrument_groups = self.get_instrument_groups()
-        self.processing_types = self.get_processing_types()
-        self.data = {}
-        self.troubleshoot["TOLNet"] = []
-        return
-
-    def print_product_types(self):
-        """
-        Prints out all products and their respective IDs.
-        """
-        print("\n TOLNET product IDs:")
-        print(
-            self.products[["id", "product_type_name", "description"]].to_string(index=False), "\n"
-        )
-        return
-
-    def print_file_types(self):
-        """
-        Prints out all available filetypes and their respective IDs.
-        """
-        print("\n File Types:")
-        print(self.file_types[["id", "file_type_name"]].to_string(index=False), "\n")
-        return
-
-    def print_instrument_groups(self):
-        """
-        Prints out all recorded instrument groups and their respective IDs.
-        """
-        print("\n Instrument Groups:")
-        print(
-            self.instrument_groups[["id", "instrument_group_name", "description"]].to_string(
-                index=False
-            ),
-            "\n",
-        )
-        return
-
-    def print_processing_types(self):
-        """
-        Prints out all present processing types and their respective IDs.
-        """
-        print("\n Processing Types:")
-        print(self.processing_types[["id", "processing_type_name"]].to_string(index=False), "\n")
-        return
-
-    @staticmethod
-    def get_product_types():
-        """
-        Returns a DataFrame containing all product types.
-        The returned DataFrame contains the columns id, processing_type_name, description,
-        display_order, public, and show_on_graph_page.
-        """
-        return pd.DataFrame(
-            requests.get("https://tolnet.larc.nasa.gov/api/data/product_types").json()
-        ).sort_values(by=["id"])
-
-    @staticmethod
-    def get_file_types():
-        """
-        Returns a DataFrame containing all file types.
-        The returned DataFrame contains the columns id, file_type_name, description, display_order, and public.
-        """
-        return pd.DataFrame(
-            requests.get("https://tolnet.larc.nasa.gov/api/data/file_types").json()
-        ).sort_values(by=["id"])
-
-    @staticmethod
-    def get_instrument_groups():
-        """
-        Returns a DataFrame containing all instrument groups.
-        The returned DataFrame contains the columns id, instrument_group_name, folder_name, description,
-        display_order, current_pi(Principle Investigator), doi, and citation_url.
-        """
-        return pd.DataFrame(
-            requests.get("https://tolnet.larc.nasa.gov/api/instruments/groups").json()
-        ).sort_values(by=["id"])
-
-    @staticmethod
-    def get_processing_types():
-        """
-        Returns a DataFrame containing all processing types.
-        The returned DataFrame contains the columns id, processing_type_name, description, display_order,
-        public, and show_on_graph_page.
-        """
-        return pd.DataFrame(
-            requests.get("https://tolnet.larc.nasa.gov/api/data/processing_types").json()
-        ).sort_values(by=["id"])
-
-    @staticmethod
-    def get_files_list(min_date, max_date):
-        """
-        Parameters
-        ----------
-        min_date : STR
-            The starting date for the query, in YYYY-MM-DD format.
-        max_date : STR
-            The ending date for the query, in YYYY-MM-DD format.
-
-        Returns
-        -------
-        A DataFrame containing all files from the TOLNet API that fall between the two provided dates.
-        The DataFrame contains each file name as well as various descriptors.
-        """
-        dtypes = {
+        self.base_url = r"https://tolnet.larc.nasa.gov/api"
+        self.file_list_dtypes = {
             "row": "int16",
             "count": "int16",
             "id": "int16",
@@ -455,7 +199,119 @@ class TOLNet(GEOS_CF):
             "longitude": "int16",
             "altitude": "int16",
             "isAccessible": "bool",
-        }
+            }
+        self.plot_theme = default_plot_params.curtain_plot_theme
+        self.plot_params = default_plot_params.tolnet_plot_params
+        self.data = {}
+        self.troubleshoot["TOLNet"] = []
+        self.watermark =  useful_functions.get_asset("Watermark_TOLNet.png")
+        self.nrt = True
+        return
+
+    @cached_property
+    def api_schema(self):
+        """
+        Returns a yaml object containing api_schema information
+        """
+        response = requests.get(self.base_url + "/openapi.yml")
+        response.raise_for_status()
+        return yaml.safe_load(response.text)
+
+    @cached_property
+    def products(self) -> pd.DataFrame:
+        """
+        Returns a DataFrame containing all product types.
+        Contains:
+            - id
+            - processing_type_name
+            - description
+            - display_order
+            - public
+            - show_on_graph_page
+        """
+        response = requests.get(self.base_url + r"/data/product_types")
+        response.raise_for_status()
+        return (
+            pd.DataFrame(response.json())
+            .sort_values(by=["id"])
+            .set_index("id", drop=True)
+            )
+
+    @cached_property
+    def file_types(self) -> pd.DataFrame:
+        """
+        Returns a DataFrame containing all file types.
+        Contains:
+            - id
+            - file_type_name
+            - description
+            - display_order
+            - public
+        """
+        response = requests.get(self.base_url + r"/data/file_types")
+        response.raise_for_status()
+        return (
+            pd.DataFrame(response.json())
+            .sort_values(by=["id"])
+            .set_index("id", drop=True)
+            )
+
+    @cached_property
+    def instrument_groups(self) -> pd.DataFrame:
+        """
+        Returns a DataFrame containing all instrument groups.
+        Contains:
+            - id
+            - instrument_group_name
+            - folder_name
+            - description
+            - display_order
+            - current_pi(Principle Investigator)
+            - doi
+            - citation_url
+        """
+        response = requests.get(self.base_url + r"/instruments/groups")
+        response.raise_for_status()
+        return (
+            pd.DataFrame(response.json())
+            .sort_values(by=["id"])
+            .set_index("id", drop=True)
+            )
+
+    @cached_property
+    def processing_types(self) -> pd.DataFrame:
+        """
+        Returns a DataFrame containing all processing types.
+        Contains:
+            - id
+            - processing_type_name
+            - description
+            - display_order
+            - public
+            - show_on_graph_page.
+        """
+        response = requests.get(self.base_url + r"/data/processing_types")
+        response.raise_for_status()
+        return (
+            pd.DataFrame(response.json())
+            .sort_values(by=["id"])
+            .set_index("id", drop=True)
+            )
+
+    def get_files_list(self, min_date, max_date) -> pd.DataFrame:
+        """
+        Parameters
+        ----------
+        min_date : STR
+            The starting date for the query, in YYYY-MM-DD format.
+        max_date : STR
+            The ending date for the query, in YYYY-MM-DD format.
+
+        Returns
+        -------
+        A DataFrame containing all files from the TOLNet API that fall between the two provided dates.
+        The DataFrame contains each file name as well as various descriptors.
+        """
 
         i = 1
         url = f"https://tolnet.larc.nasa.gov/api/data/1?min_date={min_date}&max_date={max_date}&order=data_date&order_direction=desc"
@@ -471,7 +327,7 @@ class TOLNet(GEOS_CF):
         df["start_data_date"] = pd.to_datetime(df["start_data_date"])
         df["end_data_date"] = pd.to_datetime(df["end_data_date"])
         df["upload_date"] = pd.to_datetime(df["upload_date"])
-        return df.astype(dtypes)
+        return df.astype(self.file_list_dtypes)
 
     def _add_timezone(self, time):
         return [utc.replace(tzinfo=tz.gettz("UTC")) for utc in time]
@@ -558,7 +414,7 @@ class TOLNet(GEOS_CF):
             .file_type(**kwargs)
             .processing_type(**kwargs)
             .df
-        )
+            )
 
         self.request_dates = (min_date, max_date)
         self.meta_data = {}
@@ -568,13 +424,14 @@ class TOLNet(GEOS_CF):
             future_to_file = {
                 executor.submit(process_file, file_name, file_id): file_name
                 for file_name, file_id in zip(self.files["file_name"], self.files["id"])
-            }
+                }
 
-            for future in tqdm(
-                as_completed(future_to_file),
-                total=len(future_to_file),
-                desc="Downloading TOLNet Data for",
-            ):
+            for future in tqdm(as_completed(future_to_file),
+                               total=len(future_to_file),
+                               desc="Downloading TOLNet Data for",
+                               ncols=100
+                               ):
+                
                 file_name = future_to_file[future]
                 try:
                     file_name, meta_data, data = future.result()
@@ -583,13 +440,13 @@ class TOLNet(GEOS_CF):
                         str(meta_data["LATITUDE.INSTRUMENT"])
                         + "x"
                         + str(meta_data["LONGITUDE.INSTRUMENT"])
-                    )
+                        )
                     date = meta_data["fileInfo"]["start_data_date"].split(" ")[0]
                     key = (
                         meta_data["fileInfo"]["instrument_group_name"],
                         meta_data["fileInfo"]["processing_type_name"],
                         lat_lon,
-                    )
+                        )
 
                     if key not in self.data.keys():
                         self.data[key] = {}
@@ -605,218 +462,93 @@ class TOLNet(GEOS_CF):
             keys = list(self.data.keys())
             for key in keys:
                 lat_lon = key[2]
-                self.get_geos_data_multithreaded(
+                GEOS_CF().get_geos_data_multithreaded(
                     lat_lon, self.request_dates[0], self.request_dates[1]
-                )
+                    )
 
         return self
 
-    def tolnet_curtains(self, **kwargs):
-        """
-        Parameters
-        ----------
-        timezone : INT, optional
-            The timezone to display the x-axis times in. Defaults to None.
-        **kwargs : TYPE
-            Parameters for the plots. The accepted fields are title, xlabel, ylabel,
-            xlims, ylims, yticks, surface, sonde.
+    def tolnet_curtain_plot(self, data: dict, **kwargs):
+        params = useful_functions.merge_dicts(self.plot_params, kwargs)
 
-        Returns
-        -------
-        A reference to the TOLNet object.
+        with plt.rc_context(self.plot_theme):
+            fig, ax = plt.subplots()
 
-        """
+            xlims = params.get("xlims", "auto")
+            dates = sorted(list(data.keys()))
 
-        ncmap, nnorm = self.O3_curtain_colors()
-        for key in self.data.keys():
-            lim = self.request_dates
-            xlims = [np.datetime64(lim[0]), np.datetime64(lim[-1])]
+            if xlims == "auto": 
+                pass   
+            elif isinstance(xlims, list): 
+                xlims = pd.to_datetime(xlims, utc=True)
+                xlims = [xlims.min(), xlims.max()]
+                dates = pd.to_datetime(dates, utc=True)
+                dates = [ str(x.strftime("%Y-%m-%d")) for x in dates[(dates >= xlims[0]) & (dates <= xlims[1])] ]
 
-            if key[0] == "GEOS_CF":
-                location = "GEOS-CF data"
-            else:
-                first_file = list(self.meta_data[key])[0]
-                location = self.meta_data[key][first_file]["attributes"]["DATA_LOCATION"].replace(
-                    ".", ", "
-                )
+            for date in dates:
+                if xlims == "auto": 
+                    df = data[date].copy()
+                else:
+                    df = data[date].copy()[xlims[0]:xlims[1]]
 
-            title = f"{location} ({key[0]} / {key[1]}) \n {str(xlims[0])} - {str(xlims[1])}"
+                if df.empty:
+                    continue
 
-            plotname = f"{key[0]}_{key[1]}_{key[2]}_{str(xlims[0])}_{str(xlims[-1])}.png"
-            savename = (
-                plotname.replace(" ", "_").replace("-", "_").replace("\\", "").replace("/", "")
-            )
+                time_resolution = kwargs.get("time_resolution", "auto")
 
-            params = {"title": title, "savefig": False, "savename": savename, "xlims": xlims}
+                if time_resolution == "auto": 
+                    resolution = np.min([df.index[i] - df.index[i-1] for i in range(1, len(df))])
+                    df = df.resample(f"{resolution.seconds}s").mean()
+                else: 
+                    df = df.resample(f"{time_resolution}").mean()
 
-            if "GEOS_CF" not in key[0]:
-                df = []
-                for filename in self.data[key].keys():
-                    df.append(self.data[key][filename])
+                X, Y, Z = ( df.index, df.columns, df.to_numpy().T )
 
-                df = pd.concat(df)
-                df.sort_index(inplace=True)
-                timedelta = min(
-                    [(df.index[i] - df.index[i - 1]).seconds for i in range(1, len(df))]
-                )
-                df = df.resample(f"{timedelta}s").mean()
+                cmap, norm = colorbars.tolnet_ozone()
 
-                X, Y, Z = (
-                    df.index,
-                    df.columns,
-                    df.to_numpy().T,
-                )
+                if params.get("use_countourf", False):
+                    levels = norm.boundaries
+                    im = ax.contourf(X, Y, Z, levels=levels, cmap=cmap, norm=norm)
+                else:
+                    im = ax.pcolormesh(X, Y, Z, cmap=cmap, norm=norm, shading="nearest", alpha=1)
+            
+            params["fig.colorbar"]["mappable"] = im
 
+            plot_utilities.apply_plot_params(fig, ax, **params)
 
-            else:
-                T = []
-                h = []
-                o = []
-                for date in self.data[key]:
-                    t = self.data[key][date]["time"]
-                    h.append(self.data[key][date]["height"])
-                    o.append(self.data[key][date]["ozone"])
-                    T.append(pd.DataFrame(t))
+            plot_utilities.apply_datetime_axis(ax)
 
-                time = pd.concat(T).set_index([0], drop=False).sort_index()
-                ozone = pd.concat(o).sort_index()
-                height = pd.concat(h).sort_index()
-
-                X = time.sort_index(axis=1, ascending=False).values
-                Y = height.sort_index(axis=1, ascending=False).values / 1000
-                Z = ozone.sort_index(axis=1, ascending=False).values
-                params["use_countourf"] = True
-
-            params.update(kwargs)
-            self.curtain_plot(X, Y, Z, **params)
-
-        return self
-
-
-# %% Example
-
+            if self.watermark: 
+                plot_utilities.apply_watermark(fig, self.watermark)
+            
+            if self.nrt is True: 
+                plot_utilities.apply_near_real_time(ax)
+            
+            plt.show()
+        return 
+    
 if __name__ == "__main__":
-    date_start = "2023-08-08"
-    date_end = "2023-08-11"
+    tolnet = TOLNet()
+
+    tolnet.products
+    tolnet.file_types
+    tolnet.instrument_groups
+    tolnet.processing_types
+
+
+    date_start = "2024-08-08"
+    date_end = "2024-08-09"
     product_IDs = [4]
 
-    tolnet = TOLNet()
-    print("Created TOLNET instance")
-
-    tolnet.print_product_types()
-    tolnet.print_processing_types()
-    tolnet.print_instrument_groups()
-    tolnet.print_file_types()
-
     data = tolnet.import_data(
-        min_date=date_start, max_date=date_end, product_type=product_IDs, GEOS_CF=True
-    )
-
-    # %%
-
-    data.tolnet_curtains()
-
-# %%
-
-
-params = {
-        "ylabel": "Altitude (km ASL)",
-        "xlabel": "Datetime (UTC)",
-        "fontsize_label": 18,
-        "fontsize_ticks": 16,
-        "fontsize_title": 20,
-        "title": {
-            "label": r"$O_3$ Mixing Ratio Profile",
-            "fontsize": 16
-        },
-        "savefig": {
-            "fname": None,
-            "dpi": 300,
-            "transparent": True,
-            "format": "png",
-            "bbox_inches": "tight"
-        },
-        "ylims": [0, 12],
-        "yticks": np.arange(0, 15.1, 1),
-        "figsize": (30, 8),
-        "layout": "tight",
-        "cbar_label": "Ozone ($ppb_v$)",
-        "fontsize_cbar": 16,
-        "xlims": ["2025-06-15", "2025-08-15"],
-        "grid": {
-            "visible": True,
-            "color": "gray",
-            "linestyle": "--",
-            "linewidth": 0.5
-        }
-    }
+        min_date=date_start, max_date=date_end, product_type=product_IDs, GEOS_CF=False
+        )
 
 translator = str.maketrans({c: "_" for c in string.punctuation})
 
+tolnet.tolnet_curtain_plot(data.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '40.89x-111.89')])
 
 
 
 
-def curtain_plot(data: dict, **kwargs):
-    fig, ax = plt.subplots(
-        ncols = 1,
-        nrows = 1,
-        figsize=params["figsize"],
-        layout=params["layout"]
-        )
 
-    for date in data[key].keys():
-        df = data[key][date].copy()
-
-        X, Y, Z = (
-                    df.index,
-                    df.columns,
-                    df.to_numpy().T,
-                )
-
-        ncmap, nnorm = utilities().O3_curtain_colors()
-
-        if kwargs.get("use_countourf", False):
-            levels = nnorm.boundaries
-            im = ax.contourf(X, Y, Z, levels=levels, cmap=ncmap, norm=nnorm)
-
-        else:
-            im = ax.pcolormesh(X, Y, Z, cmap=ncmap, norm=nnorm, shading="nearest", alpha=1)
-
-    cbar = fig.colorbar(im, ax=ax, pad=0.01, ticks=[0.001, *np.arange(10, 101, 10), 200, 300])
-    cbar.set_label(label=params["cbar_label"], size=16, weight="bold")
-
-    plt.setp(ax.get_xticklabels(), fontsize=params["fontsize_ticks"])
-    plt.setp(ax.get_yticklabels(), fontsize=params["fontsize_ticks"])
-
-    cbar.ax.tick_params(labelsize=params["fontsize_ticks"])
-    plt.title(**params["title"])
-
-    ax.set_ylabel(params["ylabel"], fontsize=params["fontsize_label"])
-    ax.set_xlabel(params["xlabel"], fontsize=params["fontsize_label"])
-
-    xlims = params.get("xlims", None)
-    if xlims:
-        xlims = [np.datetime64(x) for x in xlims]
-        ax.set_xlim(xlims)
-
-    ax.set_yticks(params["yticks"])
-
-    ax.set_ylim(params["ylims"])
-
-    converter = mdates.ConciseDateConverter()
-    munits.registry[datetime.datetime] = converter
-    ax.xaxis_date()
-
-    ax.grid(**params["grid"])
-    ax.xaxis.set_minor_locator(mdates.DayLocator(interval=1))
-
-    if params["savefig"]["fname"]:
-        plt.savefig(**params["savefig"])
-
-    plt.show()
-
-
-
-
-#%%
