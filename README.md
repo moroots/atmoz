@@ -32,8 +32,8 @@ The package is structured to allow easy extension, with plans to incorporate sup
 
 ## Directory Structure
 
-```
 <!-- START FILETREE -->
+ ``` 
 atmoz/
 ├── assets/
 │   ├── package_info/
@@ -50,8 +50,8 @@ atmoz/
     ├── default_plot_params.py
     ├── plot_utilities.py
     └── useful_functions.py
+ ``` 
 <!-- END FILETREE -->
-```
 
 ## Installation
 
