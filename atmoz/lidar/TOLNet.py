@@ -403,6 +403,8 @@ class TOLNet(debug.utilities):
     def tolnet_curtain_plot(self, data: dict, **kwargs):
         params = useful_functions.merge_dicts(self.plot_params, kwargs)
 
+        cmap, norm = colorbars.tolnet_ozone()
+
         with plt.rc_context(self.plot_theme):
             fig, ax = plt.subplots()
 
@@ -435,8 +437,6 @@ class TOLNet(debug.utilities):
                     df = df.resample(f"{time_resolution}").mean()
 
                 X, Y, Z = ( df.index, df.columns, df.to_numpy().T )
-
-                cmap, norm = colorbars.tolnet_ozone()
 
                 if params.get("use_countourf", False):
                     levels = norm.boundaries
