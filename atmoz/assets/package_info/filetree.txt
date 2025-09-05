@@ -1,0 +1,16 @@
+atmoz/
+├── assets/
+│   ├── package_info/
+│   └── watermarks/
+├── data_access/
+│   └── NASA.py
+├── lidar/
+│   └── TOLNet.py
+├── models/
+│   └── geos_cf.py
+└── resources/
+    ├── colorbars.py
+    ├── debug.py
+    ├── default_plot_params.py
+    ├── plot_utilities.py
+    └── useful_functions.py
