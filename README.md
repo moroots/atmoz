@@ -62,9 +62,8 @@ pip install git+https://github.com/moroots/atmoz
 
 ## License
 
-Atmoz is licensed under the GNU General Public License v3.0 (GPLv3).  
-See the [online](https://www.gnu.org/licenses/gpl-3.0.html) for details.
-
-```
 Copyright (c) 2025 Maurice Roots
-```
+Atmoz is licensed under the [GNU General Public License v3.0 (GPLv3)](https://www.gnu.org/licenses/gpl-3.0.html).
+
+
+
