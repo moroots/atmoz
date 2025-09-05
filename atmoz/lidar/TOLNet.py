@@ -478,9 +478,9 @@ if __name__ == "__main__":
         GEOS_CF=False
         )
 
-translator = str.maketrans({c: "_" for c in string.punctuation})
+    translator = str.maketrans({c: "_" for c in string.punctuation})
 
-tolnet.tolnet_curtain_plot(data.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '40.89x-111.89')])
+    tolnet.tolnet_curtain_plot(data.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '40.89x-111.89')])
 
 
 
