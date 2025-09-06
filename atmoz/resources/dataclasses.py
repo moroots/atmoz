@@ -26,6 +26,57 @@ from types import SimpleNamespace
 from collections import namedtuple
 
 #%% 
+@dataclass
+class dataframe:
+    data: np.ndarray  # e.g., pd.DataFrame or pd.Series
+    units: str = ""
+
+    def __post_init__(self):
+        # Convert masked arrays to regular arrays with NaN
+        if isinstance(self.data, np.ma.MaskedArray):
+            self.data = self.data.filled(np.nan)
+        # Convert Pint Quantities to plain numpy arrays (drop units)
+        if hasattr(self.data, "magnitude") and hasattr(self.data, "units"):
+            self.data = np.asarray(self.data.magnitude)
+        # If not already a DataFrame or Series, convert to DataFrame
+        if not isinstance(self.data, (pd.DataFrame, pd.Series)):
+            self.data = pd.DataFrame(self.data)
+    
+    def __repr__(self):
+        return f"atmoz.dataframe(units='{self.units}', shape={self.data.shape})\n{self.data.__repr__()}"
+
+    def __getattr__(self, name):
+        # Only called if attribute not found on self; delegate to data
+        if name == "units":
+            # Prevent recursion for units
+            return self.__dict__["units"]
+        return getattr(self.data, name)
+    
+    # Math operations
+    def __add__(self, other):
+        if isinstance(other, dataframe):
+            return dataframe(self.data + other.data, units=self.units)
+        else:
+            return dataframe(self.data + other, units=self.units)
+
+    def __sub__(self, other):
+        if isinstance(other, dataframe):
+            return dataframe(self.data - other.data, units=self.units)
+        else:
+            return dataframe(self.data - other, units=self.units)
+
+    def __mul__(self, other):
+        if isinstance(other, dataframe):
+            return dataframe(self.data * other.data, units=self.units)
+        else:
+            return dataframe(self.data * other, units=self.units)
+
+    def __truediv__(self, other):
+        if isinstance(other, dataframe):
+            return dataframe(self.data / other.data, units=self.units)
+        else:
+            return dataframe(self.data / other, units=self.units)
+        
 
 @dataclass
 class LidarProfiles:
@@ -41,60 +92,27 @@ class LidarProfiles:
     metadata: Optional[Dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self):
-        n_profiles = len(self.time)
-        if isinstance(self.altitude, list):
-            if len(self.altitude) != n_profiles:
-                raise ValueError("altitude must have same length as time")
         for var, varinfo in self.data.items():
-            if len(varinfo["data"]) != n_profiles:
+            # Convert masked arrays to regular arrays before DataFrame
+            arr = varinfo["data"]
+            if isinstance(arr, np.ma.MaskedArray):
+                arr = arr.filled(np.nan)
+            # Convert Pint Quantities to plain numpy arrays
+            if hasattr(arr, "magnitude") and hasattr(arr, "units"):
+                arr = np.asarray(arr.magnitude)
+            if len(arr) != len(self.time):
                 raise ValueError(f"data for variable '{var}' must have same length as time")
-            # Dynamically set each variable as an attribute with .data and .units
-            setattr(self, var, SimpleNamespace(data=varinfo["data"], units=varinfo.get("units", "")))
+            test = dataframe(
+                data=pd.DataFrame(arr, index=self.time),
+                units=varinfo.get("units", "")
+            )
+            setattr(self, var, test)
         self.variables = list(self.data.keys())
-    
-    # @cached_property
-    # def resolution(self) -> List[float]:
-    #     """
-    #     Calculate the smallest vertical (m) and temporal (s) resolution for each profile.
-    #     """
-    #     r = namedtuple("vertical", "temporal")
-    #     resolutions = r(np.nan, np.nan)
-        
-        
-        
-    #     for if len(alt) > 2:
-    #         res = np.nanmin(np.diff(time))
-    #         resolutions._replace(temporal=res)
-    #     return resolutions
+        if self.variables: 
+            self.time = getattr(self, self.variables[0]).data.index
 
     def copy(self):
         return copy.deepcopy(self)
-
-    def to_dataframe(self) -> Dict[str, pd.DataFrame]:
-        """
-        Return a dictionary of DataFrames, one for each data variable.
-        Each DataFrame has a MultiIndex (time, latitude, longitude, instrument, site),
-        columns are altitude, and values are the data for that variable.
-        """
-        dfs = {}
-        n_profiles = len(self.time)
-        for var in self.variables:
-            records = []
-            index = []
-            for i in range(n_profiles):
-                # Each profile: 1D array of altitudes and data
-                alt = self.altitude[i]
-                data = getattr(self, var).data[i]
-                # Build a row: index is (time, lat, lon, instrument, site), columns are altitude
-                index.append((self.time[i], (self.longitude, self.latitude)))
-                records.append(pd.Series(data, index=alt))
-            # Build DataFrame for this variable
-            df = pd.DataFrame(records, index=pd.MultiIndex.from_tuples(
-                index, names=["time", "latitude", "longitude"]
-            ))
-            df.columns.name = "altitude"
-            dfs[var] = df
-        return dfs
 
     def __repr__(self):
         def get_shape(x):
@@ -115,6 +133,33 @@ class LidarProfiles:
     
     def plot(self, plot_type: str, ax: Optional[plt.Axes] = None, **kwargs):
         pass
+
+    def __getattr__(self, name):
+        """
+        Delegate attribute access to each variable's data (if possible).
+        For example, lidar_profiles.head() will return {var: data.head()} for each var.
+        """
+        # Only called if attribute not found on self
+        def apply_to_all(*args, **kwargs):
+            results = {}
+            for var in self.variables:
+                data = self.data[var]["data"]
+                print(data)
+                # If data is a DataFrame or Series, apply the method
+                if hasattr(data, name):
+                    results[var] = getattr(data, name)(*args, **kwargs)
+                else:
+                    # For numpy arrays, support some common methods
+                    if hasattr(np, name):
+                        results[var] = getattr(np, name)(data, *args, **kwargs)
+                    else:
+                        raise AttributeError(f"'{type(data)}' object has no attribute '{name}'")
+            return results
+        # Only delegate if not a dataclass field or method
+        if name in self.__dict__ or name in self.__class__.__dict__:
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+        return apply_to_all
+
 
 #%%
 
@@ -160,19 +205,19 @@ def bytes_to_str(val):
 
 data_vars = {
     "ozone": {
-        "data": everything["O3.MIXING.RATIO.VOLUME_DERIVED"]["_data"], 
+        "data": everything["O3.MIXING.RATIO.VOLUME_DERIVED"]["_data"].astype(np.float32), 
         "units": bytes_to_str(everything["O3.MIXING.RATIO.VOLUME_DERIVED"]["_attrs"]['VAR_UNITS'])
     },
     "uncertainty": {
-        "data": everything["O3.MIXING.RATIO.VOLUME_DERIVED_UNCERTAINTY.COMBINED.STANDARD"]["_data"],
+        "data": everything["O3.MIXING.RATIO.VOLUME_DERIVED_UNCERTAINTY.COMBINED.STANDARD"]["_data"].astype(np.float32),
         "units": bytes_to_str(everything["O3.MIXING.RATIO.VOLUME_DERIVED_UNCERTAINTY.COMBINED.STANDARD"]["_attrs"]['VAR_UNITS'])
         },
     "ozone_number_density": {
-        "data": everything["O3.NUMBER.DENSITY_ABSORPTION.DIFFERENTIAL"]["_data"],
+        "data": everything["O3.NUMBER.DENSITY_ABSORPTION.DIFFERENTIAL"]["_data"].astype(np.float32),
         "units": bytes_to_str(everything["O3.NUMBER.DENSITY_ABSORPTION.DIFFERENTIAL"]["_attrs"]['VAR_UNITS'])
     },
     "ozone_number_density_uncertainty": {
-        "data": everything["O3.NUMBER.DENSITY_ABSORPTION.DIFFERENTIAL_UNCERTAINTY.COMBINED.STANDARD"]["_data"],
+        "data": everything["O3.NUMBER.DENSITY_ABSORPTION.DIFFERENTIAL_UNCERTAINTY.COMBINED.STANDARD"]["_data"].astype(np.float32),
         "units": bytes_to_str(everything["O3.NUMBER.DENSITY_ABSORPTION.DIFFERENTIAL_UNCERTAINTY.COMBINED.STANDARD"]["_attrs"]['VAR_UNITS'])
     },
 }
@@ -208,3 +253,24 @@ with gzip.open("everything.pkl.gz", "wb") as f:
 # Load
 with gzip.open("everything.pkl.gz", "rb") as f:
     everything_loaded = pickle.load(f)
+
+
+#%% 
+
+
+from pint import UnitRegistry
+ureg = UnitRegistry()
+
+# Define ppbv and ppmv if not already present
+ureg.define('ppbv = 1e-9 = parts_per_billion_by_volume')
+ureg.define('ppmv = 1e-6 = parts_per_million_by_volume')
+
+# Define a value in ppbv
+val = 1500 * ureg('ppbv')
+
+# Convert to ppmv
+val_in_ppmv = val.to('ppmv')
+print(val_in_ppmv)  # 1.5 ppmv
+
+
+#%%
