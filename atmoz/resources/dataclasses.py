@@ -26,6 +26,10 @@ from types import SimpleNamespace
 from collections import namedtuple
 
 #%% 
+
+from pint import UnitRegistry
+ureg = UnitRegistry()
+
 @dataclass
 class dataframe:
     data: np.ndarray  # e.g., pd.DataFrame or pd.Series
@@ -78,6 +82,18 @@ class dataframe:
             return dataframe(self.data / other, units=self.units)
         
 
+    def convert_units(self, new_units: str):
+        """
+        Convert the data to new units using Pint.
+        """
+        if not self.units:
+            raise ValueError("Current units are not set.")
+        # Get conversion factor
+        factor = (1 * ureg(self.units)).to(new_units).magnitude
+        # Apply to data
+        new_data = self.data * factor
+        return dataframe(new_data, units=new_units)
+        
 @dataclass
 class LidarProfiles:
     """
@@ -192,6 +208,7 @@ def hdf5_to_dict(h5obj):
 import h5py
 
 filepath = r"C:\Users\Magnolia\OneDrive - UMBC\Research\Analysis\May2021\data\TROPOZ\lidar\groundbased_lidar.o3_nasa.gsfc003_hires_goddard.space.flight.center.md_20210519t000000z_20210520t000000z_001.h5"
+filepath = r"c:\Users\meroo\OneDrive - UMBC\Research\Analysis\May2021\data\TROPOZ\lidar\groundbased_lidar.o3_nasa.gsfc003_hires_goddard.space.flight.center.md_20210519t000000z_20210520t000000z_001.h5"
 
 with h5py.File(filepath, "r") as f:
     everything = hdf5_to_dict(f)
@@ -256,10 +273,6 @@ with gzip.open("everything.pkl.gz", "rb") as f:
 
 
 #%% 
-
-
-from pint import UnitRegistry
-ureg = UnitRegistry()
 
 # Define ppbv and ppmv if not already present
 ureg.define('ppbv = 1e-9 = parts_per_billion_by_volume')
