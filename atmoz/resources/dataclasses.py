@@ -24,12 +24,22 @@ import matplotlib.image as mimg
 import copy
 from types import SimpleNamespace
 from collections import namedtuple
+from pint import UnitRegistry
 
-#%% 
+ureg = UnitRegistry()
+try:
+    ureg.define('ppbv = 1e-9 = parts_per_billion_by_volume')
+except Exception:
+    pass
+try:
+    ureg.define('ppmv = 1e-6 = parts_per_million_by_volume')
+except Exception:
+    pass
+
 @dataclass
 class dataframe:
     data: np.ndarray  # e.g., pd.DataFrame or pd.Series
-    units: str = ""
+    units: str
 
     def __post_init__(self):
         # Convert masked arrays to regular arrays with NaN
@@ -44,7 +54,6 @@ class dataframe:
     
     def __repr__(self):
         return f"atmoz.dataframe(units='{self.units}', shape={self.data.shape})\n{self.data.__repr__()}"
-
     def __getattr__(self, name):
         # Only called if attribute not found on self; delegate to data
         if name == "units":
@@ -52,31 +61,77 @@ class dataframe:
             return self.__dict__["units"]
         return getattr(self.data, name)
     
+    def _get_compatible(self, other):
+        """Return other's data converted to self's units if possible."""
+        if not isinstance(other, dataframe):
+            # Handle Pint Quantity or similar
+            if hasattr(other, "magnitude") and hasattr(other, "units"):
+                # Convert to self.units if possible
+                try:
+                    factor = (1 * ureg(str(other.units))).to(self.units).magnitude
+                    return other.magnitude * factor
+                except Exception:
+                    # If not convertible, just use magnitude (will combine units in op)
+                    return other.magnitude
+            return other
+        if self.units == other.units:
+            return other.data
+        # Try to convert other's units to self.units
+        try:
+            factor = (1 * ureg(other.units)).to(self.units).magnitude
+            return other.data * factor
+        except Exception as e:
+            raise ValueError(f"Cannot convert units '{other.units}' to '{self.units}': {e}")
+
     # Math operations
     def __add__(self, other):
-        if isinstance(other, dataframe):
-            return dataframe(self.data + other.data, units=self.units)
+        if isinstance(other, dataframe) or (hasattr(other, "magnitude") and hasattr(other, "units")):
+            data_other = self._get_compatible(other)
+            return dataframe(self.data + data_other, units=self.units)
         else:
             return dataframe(self.data + other, units=self.units)
 
     def __sub__(self, other):
-        if isinstance(other, dataframe):
-            return dataframe(self.data - other.data, units=self.units)
+        if isinstance(other, dataframe) or (hasattr(other, "magnitude") and hasattr(other, "units")):
+            data_other = self._get_compatible(other)
+            return dataframe(self.data - data_other, units=self.units)
         else:
             return dataframe(self.data - other, units=self.units)
 
     def __mul__(self, other):
         if isinstance(other, dataframe):
-            return dataframe(self.data * other.data, units=self.units)
+            # Combine units for multiplication
+            new_units = f"({self.units})*({other.units})"
+            return dataframe(self.data * other.data, units=new_units)
+        elif hasattr(other, "magnitude") and hasattr(other, "units"):
+            new_units = f"({self.units})*({other.units})"
+            return dataframe(self.data * other.magnitude, units=new_units)
         else:
             return dataframe(self.data * other, units=self.units)
 
     def __truediv__(self, other):
         if isinstance(other, dataframe):
-            return dataframe(self.data / other.data, units=self.units)
+            # Combine units for division
+            new_units = f"({self.units})/({other.units})"
+            return dataframe(self.data / other.data, units=new_units)
+        elif hasattr(other, "magnitude") and hasattr(other, "units"):
+            new_units = f"({self.units})/({other.units})"
+            return dataframe(self.data / other.magnitude, units=new_units)
         else:
             return dataframe(self.data / other, units=self.units)
         
+
+    def convert_units(self, target_unit: str, ureg_in=None) -> 'dataframe':
+        """
+        Convert the units of the dataframe using Pint.
+        """
+        _ureg = ureg_in or ureg
+        if not self.units:
+            raise ValueError("Current units are not set; cannot convert.")
+        factor = (1 * _ureg(self.units)).to(target_unit).magnitude
+        converted_data = self.data * factor
+        return dataframe(converted_data, units=target_unit)
+    
 
 @dataclass
 class LidarProfiles:
@@ -161,8 +216,6 @@ class LidarProfiles:
         return apply_to_all
 
 
-#%%
-
 def hdf5_to_dict(h5obj):
     """
     Recursively extract all groups, datasets, and attributes from an h5py File or Group
@@ -195,8 +248,6 @@ filepath = r"C:\Users\Magnolia\OneDrive - UMBC\Research\Analysis\May2021\data\TR
 
 with h5py.File(filepath, "r") as f:
     everything = hdf5_to_dict(f)
-
-#%% 
 
 def bytes_to_str(val):
     if isinstance(val, bytes):
@@ -258,7 +309,6 @@ with gzip.open("everything.pkl.gz", "rb") as f:
 #%% 
 
 
-from pint import UnitRegistry
 ureg = UnitRegistry()
 
 # Define ppbv and ppmv if not already present
@@ -274,3 +324,4 @@ print(val_in_ppmv)  # 1.5 ppmv
 
 
 #%%
+
