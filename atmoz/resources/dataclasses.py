@@ -245,6 +245,7 @@ def hdf5_to_dict(h5obj):
 import h5py
 
 filepath = r"C:\Users\Magnolia\OneDrive - UMBC\Research\Analysis\May2021\data\TROPOZ\lidar\groundbased_lidar.o3_nasa.gsfc003_hires_goddard.space.flight.center.md_20210519t000000z_20210520t000000z_001.h5"
+filepath = r"c:\Users\meroo\OneDrive - UMBC\Research\Analysis\May2021\data\TROPOZ\lidar\groundbased_lidar.o3_nasa.gsfc003_hires_goddard.space.flight.center.md_20210519t000000z_20210520t000000z_001.h5"
 
 with h5py.File(filepath, "r") as f:
     everything = hdf5_to_dict(f)
