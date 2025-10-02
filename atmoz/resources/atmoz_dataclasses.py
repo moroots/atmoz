@@ -8,6 +8,7 @@ Description:
      - Some useful dataclasses
 """
 #%% 
+
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 import pandas as pd
@@ -28,16 +29,23 @@ from pint import UnitRegistry
 
 ureg = UnitRegistry()
 try:
-    ureg.define('ppbv = 1e-9 = parts_per_billion_by_volume')
+    ureg.define('ppbv = 1e-9 mole/mole = parts_per_billion_by_volume')
 except Exception:
     pass
+
 try:
-    ureg.define('ppmv = 1e-6 = parts_per_million_by_volume')
+    ureg.define('ppmv = 1e-6 mole/mole = parts_per_million_by_volume')
+except Exception:
+    pass
+
+try:
+    ureg.define('pptv = 1e-12 mole/mole = parts_per_trillion_by_volume')
 except Exception:
     pass
 
 @dataclass
 class dataframe:
+    __module__ = "atmoz"
     data: np.ndarray  # e.g., pd.DataFrame or pd.Series
     units: str
 
@@ -135,13 +143,19 @@ class dataframe:
 
 @dataclass
 class LidarProfiles:
+    __module__ = "atmoz" 
+    
     """
     Dataclass to store one or many lidar profiles with multiple variables.
     Each variable is dynamically exposed as an attribute with .data and .units.
     """
+
     time: Union[List[datetime], np.ndarray]
     altitude: Union[List[np.ndarray], np.ndarray]
-    data: Dict[str, Dict[str, Any]]  # e.g., {"ozone": {"data": [...], "units": "ppbv"}, ...}
+
+    # e.g., {"ozone": {"data": [...], "units": "ppbv"}, ...}
+    data: Dict[str, Dict[str, Any]]  
+    
     latitude: Dict[str, Any]
     longitude: Dict[str, Any]
     metadata: Optional[Dict[str, Any]] = field(default_factory=dict)
@@ -157,10 +171,12 @@ class LidarProfiles:
                 arr = np.asarray(arr.magnitude)
             if len(arr) != len(self.time):
                 raise ValueError(f"data for variable '{var}' must have same length as time")
+            
             test = dataframe(
                 data=pd.DataFrame(arr, index=self.time),
                 units=varinfo.get("units", "")
-            )
+                )
+            
             setattr(self, var, test)
         self.variables = list(self.data.keys())
         if self.variables: 
@@ -185,9 +201,6 @@ class LidarProfiles:
             f"  data: \n{data_lines}\n"
         )
         return s
-    
-    def plot(self, plot_type: str, ax: Optional[plt.Axes] = None, **kwargs):
-        pass
 
     def __getattr__(self, name):
         """
@@ -214,115 +227,86 @@ class LidarProfiles:
         if name in self.__dict__ or name in self.__class__.__dict__:
             raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
         return apply_to_all
+    
+    def plot(self, plot_type: str, ax: Optional[plt.Axes] = None, **kwargs):
+        pass
 
 
-def hdf5_to_dict(h5obj):
-    """
-    Recursively extract all groups, datasets, and attributes from an h5py File or Group
-    into a nested dictionary, preserving the structure.
-    """
-    out = {}
-    # Add attributes
-    if hasattr(h5obj, "attrs"):
-        out["_attrs"] = {k: v for k, v in h5obj.attrs.items()}
-    # Add datasets and groups
-    for key, item in h5obj.items():
-        if "fake" in key.lower():
-            continue
-        if isinstance(item, h5py.Group):
-            out[key] = hdf5_to_dict(item)
-        elif isinstance(item, h5py.Dataset):
-            out[key] = {
-                "_data": item[()],
-                "_attrs": {k: v for k, v in item.attrs.items()}
-            }
-    return out
+if __name__ == "__main__":
+    # Usage example:
+    import h5py
+
+    def hdf5_to_dict(h5obj):
+        """
+        Recursively extract all groups, datasets, and attributes from an h5py File or Group
+        into a nested dictionary, preserving the structure.
+        """
+        out = {}
+        # Add attributes
+        if hasattr(h5obj, "attrs"):
+            out["_attrs"] = {k: v for k, v in h5obj.attrs.items()}
+        # Add datasets and groups
+        for key, item in h5obj.items():
+            if "fake" in key.lower():
+                continue
+            if isinstance(item, h5py.Group):
+                out[key] = hdf5_to_dict(item)
+            elif isinstance(item, h5py.Dataset):
+                out[key] = {
+                    "_data": item[()],
+                    "_attrs": {k: v for k, v in item.attrs.items()}
+                }
+        return out
 
 
+    filepath = r"C:\Users\Magnolia\OneDrive - UMBC\Research\Analysis\May2021\data\TROPOZ\lidar\groundbased_lidar.o3_nasa.gsfc003_hires_goddard.space.flight.center.md_20210519t000000z_20210520t000000z_001.h5"
+    # filepath = r"c:\Users\meroo\OneDrive - UMBC\Research\Analysis\May2021\data\TROPOZ\lidar\groundbased_lidar.o3_nasa.gsfc003_hires_goddard.space.flight.center.md_20210519t000000z_20210520t000000z_001.h5"
 
-#%% 
-# Usage example:
-import h5py
+    with h5py.File(filepath, "r") as f:
+        everything = hdf5_to_dict(f)
 
-filepath = r"C:\Users\Magnolia\OneDrive - UMBC\Research\Analysis\May2021\data\TROPOZ\lidar\groundbased_lidar.o3_nasa.gsfc003_hires_goddard.space.flight.center.md_20210519t000000z_20210520t000000z_001.h5"
-filepath = r"c:\Users\meroo\OneDrive - UMBC\Research\Analysis\May2021\data\TROPOZ\lidar\groundbased_lidar.o3_nasa.gsfc003_hires_goddard.space.flight.center.md_20210519t000000z_20210520t000000z_001.h5"
+    def bytes_to_str(val):
+        if isinstance(val, bytes):
+            return val.decode()
+        return str(val)
 
-with h5py.File(filepath, "r") as f:
-    everything = hdf5_to_dict(f)
-
-def bytes_to_str(val):
-    if isinstance(val, bytes):
-        return val.decode()
-    return str(val)
-
-data_vars = {
-    "ozone": {
-        "data": everything["O3.MIXING.RATIO.VOLUME_DERIVED"]["_data"].astype(np.float32), 
-        "units": bytes_to_str(everything["O3.MIXING.RATIO.VOLUME_DERIVED"]["_attrs"]['VAR_UNITS'])
-    },
-    "uncertainty": {
-        "data": everything["O3.MIXING.RATIO.VOLUME_DERIVED_UNCERTAINTY.COMBINED.STANDARD"]["_data"].astype(np.float32),
-        "units": bytes_to_str(everything["O3.MIXING.RATIO.VOLUME_DERIVED_UNCERTAINTY.COMBINED.STANDARD"]["_attrs"]['VAR_UNITS'])
+    data_vars = {
+        "ozone": {
+            "data": everything["O3.MIXING.RATIO.VOLUME_DERIVED"]["_data"].astype(np.float32), 
+            "units": bytes_to_str(everything["O3.MIXING.RATIO.VOLUME_DERIVED"]["_attrs"]['VAR_UNITS'])
         },
-    "ozone_number_density": {
-        "data": everything["O3.NUMBER.DENSITY_ABSORPTION.DIFFERENTIAL"]["_data"].astype(np.float32),
-        "units": bytes_to_str(everything["O3.NUMBER.DENSITY_ABSORPTION.DIFFERENTIAL"]["_attrs"]['VAR_UNITS'])
-    },
-    "ozone_number_density_uncertainty": {
-        "data": everything["O3.NUMBER.DENSITY_ABSORPTION.DIFFERENTIAL_UNCERTAINTY.COMBINED.STANDARD"]["_data"].astype(np.float32),
-        "units": bytes_to_str(everything["O3.NUMBER.DENSITY_ABSORPTION.DIFFERENTIAL_UNCERTAINTY.COMBINED.STANDARD"]["_attrs"]['VAR_UNITS'])
-    },
-}
+        "uncertainty": {
+            "data": everything["O3.MIXING.RATIO.VOLUME_DERIVED_UNCERTAINTY.COMBINED.STANDARD"]["_data"].astype(np.float32),
+            "units": bytes_to_str(everything["O3.MIXING.RATIO.VOLUME_DERIVED_UNCERTAINTY.COMBINED.STANDARD"]["_attrs"]['VAR_UNITS'])
+            },
+        "ozone_number_density": {
+            "data": everything["O3.NUMBER.DENSITY_ABSORPTION.DIFFERENTIAL"]["_data"].astype(np.float32),
+            "units": bytes_to_str(everything["O3.NUMBER.DENSITY_ABSORPTION.DIFFERENTIAL"]["_attrs"]['VAR_UNITS'])
+        },
+        "ozone_number_density_uncertainty": {
+            "data": everything["O3.NUMBER.DENSITY_ABSORPTION.DIFFERENTIAL_UNCERTAINTY.COMBINED.STANDARD"]["_data"].astype(np.float32),
+            "units": bytes_to_str(everything["O3.NUMBER.DENSITY_ABSORPTION.DIFFERENTIAL_UNCERTAINTY.COMBINED.STANDARD"]["_attrs"]['VAR_UNITS'])
+        },
+    }
 
-latitude = everything["LATITUDE.INSTRUMENT"]["_data"]
-longitude = everything["LONGITUDE.INSTRUMENT"]["_data"]
-times = everything["DATETIME"]["_data"]
-altitudes = everything["ALTITUDE"]["_data"]
+    latitude = everything["LATITUDE.INSTRUMENT"]["_data"]
+    longitude = everything["LONGITUDE.INSTRUMENT"]["_data"]
+    times = everything["DATETIME"]["_data"]
+    altitudes = everything["ALTITUDE"]["_data"]
 
-# Create LidarProfiles instance
-lidar_profiles = LidarProfiles(
-    time=times,
-    altitude=altitudes,
-    data=data_vars,  # <-- change here
-    latitude=latitude,
-    longitude=longitude,
-)
+    # Create LidarProfiles instance
+    lidar_profiles = LidarProfiles(
+        time=times,
+        altitude=altitudes,
+        data=data_vars,  # <-- change here
+        latitude=latitude,
+        longitude=longitude,
+    )
 
-#%% 
+    #%% 
 
-from pympler import asizeof
-print(f"Total memory used by 'everything': {asizeof.asizeof(everything)/1024/1024:.2f} MB")
-
-#%%
-
-import pickle
-import gzip
-
-# Save with high compression
-with gzip.open("everything.pkl.gz", "wb") as f:
-    pickle.dump(everything, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-# Load
-with gzip.open("everything.pkl.gz", "rb") as f:
-    everything_loaded = pickle.load(f)
-
-
-#%% 
-
-
-ureg = UnitRegistry()
-
-# Define ppbv and ppmv if not already present
-ureg.define('ppbv = 1e-9 = parts_per_billion_by_volume')
-ureg.define('ppmv = 1e-6 = parts_per_million_by_volume')
-
-# Define a value in ppbv
-val = 1500 * ureg('ppbv')
-
-# Convert to ppmv
-val_in_ppmv = val.to('ppmv')
-print(val_in_ppmv)  # 1.5 ppmv
-
+    from pympler import asizeof
+    print(f"Total memory used by 'everything': {asizeof.asizeof(everything)/1024/1024:.2f} MB")
 
 #%%
 
