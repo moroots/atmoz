@@ -20,6 +20,7 @@ import pickle
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from atmoz.resources.useful_functions import merge_dicts
 
@@ -37,7 +38,10 @@ class AirNowParams:
     monitorType: str = field(default='0')
     includerawconcentrations: str = field(default='1')
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        """
+        Ensures that any field set to None is replaced with its default value.
+        """
         for f in fields(self):
             value = getattr(self, f.name)
             if value is None:
@@ -45,7 +49,7 @@ class AirNowParams:
                     setattr(self, f.name, f.default_factory())
                 elif f.default is not MISSING:
                     setattr(self, f.name, f.default)
-    
+
 class AirNow:
     """
     A class to interact with the AirNow API for fetching and processing air quality data.
@@ -62,15 +66,9 @@ class AirNow:
         base_url (str): Base endpoint for AirNow API.
         _queries_strings (list): Stores query strings for API requests.
         _data (list): Stores fetched data as pandas DataFrames.
-
-    Methods:
-        _build_url(**kwargs): Constructs a query URL for the AirNow API.
-        _pull(**kwargs): Fetches data from the AirNow API.
-        _process(response, **kwargs): Converts API response to pandas DataFrame.
-        _nest(df, metadata, **kwargs): Nests DataFrame by pollutant and station ID.
     """
 
-    def __init__(self, api_key=None):
+    def __init__(self, api_key: Optional[str] = None) -> None:
         """
         Initialize AirNow API handler.
 
@@ -83,11 +81,11 @@ class AirNow:
             self.api_key = api_key
 
         self.base_url = "https://www.airnowapi.org/aq/data/"
-        self._queries_strings = []
-        self._data = []
+        self._queries_strings: List[str] = []
+        self._data: List[pd.DataFrame] = []
         return
 
-    def _build_url(self, **kwargs):
+    def _build_url(self, **kwargs) -> str:
         """
         Build a URL for querying AirNow surface data.
 
@@ -106,7 +104,6 @@ class AirNow:
         Returns:
             str: Constructed URL with query parameters.
         """
-
         startDate = kwargs.get("startDate", (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%dT%H"))
         endDate = kwargs.get("endDate", (datetime.now(UTC)).strftime("%Y-%m-%dT%H"))
         parameters = kwargs.get("parameters", ["OZONE", "PM25", "PM10", "CO", "NO2", "SO2"])
@@ -125,10 +122,10 @@ class AirNow:
             'API_KEY': self.api_key
             }
 
-        self._queries_strings.append( '&'.join(f"{key}={value}" for key, value in query_params.items()) ) 
+        self._queries_strings.append('&'.join(f"{key}={value}" for key, value in query_params.items()))
         return f"{self.base_url}?{self._queries_strings[-1]}"
 
-    def _pull(self, **kwargs): 
+    def _pull(self, **kwargs) -> requests.Response:
         """
         Fetch EPA AirNow data using the API key.
 
@@ -144,9 +141,9 @@ class AirNow:
         Raises:
             Exception: If the API request fails.
         """
-        if not self.api_key: 
+        if not self.api_key:
             response = input("EPA AIRNOW API KEY: ")
-            if response: 
+            if response:
                 self.api_key = response
                 keyring.set_password("EPA_AirNow", "API_KEY", self.api_key)
             else:
@@ -158,8 +155,8 @@ class AirNow:
             return response
         else:
             raise Exception(f"API request failed with status code {response.status_code}: {response.text}")
-    
-    def _process(self, response: requests.Response, **kwargs):  
+
+    def _process(self, response: requests.Response, **kwargs) -> None:
         """
         Process the HTTP response and store as a pandas DataFrame.
 
@@ -171,14 +168,16 @@ class AirNow:
             Appends a DataFrame to self._data.
         """
         self._data.append(pd.DataFrame(response.json()))
-        return 
+        return
 
-    def _metadata(self, df: pd.DataFrame, **kwargs): 
+    def _metadata(self, df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """
         Extracts and formats metadata from a given DataFrame by removing data columns, deduplicating entries, and aggregating parameter information.
+
         Args:
             df (pd.DataFrame): Input DataFrame containing air quality data with columns such as "UTC", "Value", "RawConcentration", "AQI", "Category", "Parameter", "Unit", and "FullAQSCode".
             **kwargs: Additional keyword arguments (currently unused).
+
         Returns:
             pd.DataFrame: A DataFrame containing unique metadata entries with aggregated parameter and unit information for each unique "FullAQSCode". The resulting DataFrame includes a "Parameters" column (list of parameter/unit dictionaries) and an "id" column (row index).
         """
@@ -200,7 +199,12 @@ class AirNow:
         metadata["id"] = metadata.index
         return metadata
 
-    def _nest(self, df: pd.DataFrame, metadata: pd.DataFrame, **kwargs):
+    def _nest(
+        self, 
+        df: pd.DataFrame, 
+        metadata: pd.DataFrame, 
+        **kwargs
+    ) -> Dict[str, Dict[Any, pd.DataFrame]]:
         """
         Nest air quality measurements by pollutant and station ID.
 
@@ -227,7 +231,6 @@ class AirNow:
         df["UTC"] = pd.to_datetime(df["UTC"])
         df.set_index("UTC", inplace=True)
         
-
         data = {
             parameter: 
                     {
@@ -239,15 +242,33 @@ class AirNow:
 
         return data
 
-    def import_data(self, 
-                    date_start=None, 
-                    date_end=None,  
-                    **kwargs
-                    ):
-        
+    def import_data(
+        self, 
+        date_start: Optional[Union[str, datetime]] = None, 
+        date_end: Optional[Union[str, datetime]] = None, 
+        **kwargs
+    ) -> Tuple[Dict[str, Dict[Any, pd.DataFrame]], pd.DataFrame]:
+        """
+        Imports data from the AirNow API within a specified date range and returns the dataset along with its metadata.
+
+        Parameters:
+            date_start (str or datetime, optional): The start date for data import. If provided with `date_end`, data will be fetched for each day in the range.
+            date_end (str or datetime, optional): The end date for data import. Used with `date_start` to define the date range.
+            **kwargs: Additional keyword arguments to be passed to the AirNowParams constructor and the internal data pulling method. 
+                - silent (bool, optional): If True (default), displays a progress bar during data download.
+
+        Returns:
+            tuple:
+                - dataset (dict): The processed dataset containing the imported data, nested as required.
+                - metadata (pd.DataFrame): Metadata associated with the imported dataset.
+
+        Notes:
+            - If both `date_start` and `date_end` are not provided, data is imported for the default parameters specified in `kwargs`.
+            - Uses tqdm for progress indication if `silent` is True.
+        """
         silent = kwargs.pop("silent", True)
 
-        list_of_params_objs = []
+        list_of_params_objs: List[AirNowParams] = []
         if date_start and date_end: 
             date_range = [t.strftime("%Y-%m-%dT%H") for t in pd.date_range(start=date_start, end=date_end, freq="1d")]
             list_of_params_objs.extend([
@@ -263,17 +284,17 @@ class AirNow:
 
         iterator = tqdm(list_of_params_objs, desc="Downloading...", unit="req") if silent is True else list_of_params_objs
 
-        list_of_dfs = [
+        list_of_dfs: List[pd.DataFrame] = [
             pd.DataFrame(
                 self._pull(**asdict(obj)).json()
             )
             for obj in iterator
         ]
         
-        data = pd.concat(list_of_dfs) if len(list_of_dfs) > 1 else list_of_dfs[0]
+        data: pd.DataFrame = pd.concat(list_of_dfs) if len(list_of_dfs) > 1 else list_of_dfs[0]
         data.reset_index(drop=True, inplace=True)
-        metadata = self._metadata(data)
-        dataset = self._nest(data, metadata)
+        metadata: pd.DataFrame = self._metadata(data)
+        dataset: Dict[str, Dict[Any, pd.DataFrame]] = self._nest(data, metadata)
         return dataset, metadata
 
 
