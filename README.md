@@ -51,8 +51,7 @@ atmoz/
 │   ├── plot_utilities.py
 │   └── useful_functions.py
 └── surface/
-    ├── AirNow.py
-    └── EPA_AirNow.ipynb
+    └── AirNow.py
  ``` 
 <!-- END FILETREE -->
 
