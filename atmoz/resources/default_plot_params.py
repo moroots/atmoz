@@ -67,14 +67,6 @@ tolnet_plot_params = {
 
     "ax.set_ylims": [0, 15],
 
-    "fig.savefig": {
-        "fname": "test.png",
-        "dpi": 300,
-        "transparent": True,
-        "format": "png",
-        "bbox_inches": "tight"
-        },
-
     "fig.layout": "tight",
 
     "fig.colorbar": {
