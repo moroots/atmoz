@@ -8,6 +8,8 @@ A Module for Downloading and Plotting TOLNet Data
 
 """
 
+#%% 
+
 # Math & Data
 import pandas as pd
 import numpy as np
@@ -400,15 +402,17 @@ class TOLNet(debug.utilities):
 
         return self
 
-    def tolnet_curtain_plot(self, data: dict, **kwargs):
+    def plot_curtain(self, data: dict, **kwargs):
         params = useful_functions.merge_dicts(self.plot_params, kwargs)
-
+        xlims = params.pop("xlims", "auto")
+        time_resolution = params.pop("time_resolution", "auto")
+        
         cmap, norm = colorbars.tolnet_ozone()
 
         with plt.rc_context(self.plot_theme):
             fig, ax = plt.subplots()
 
-            xlims = params.get("xlims", "auto")
+            
             dates = sorted(list(data.keys()))
 
             if xlims == "auto": 
@@ -417,7 +421,13 @@ class TOLNet(debug.utilities):
                 xlims = pd.to_datetime(xlims, utc=True)
                 xlims = [xlims.min(), xlims.max()]
                 dates = pd.to_datetime(dates, utc=True)
-                dates = [ str(x.strftime("%Y-%m-%d")) for x in dates[(dates >= xlims[0]) & (dates <= xlims[1])] ]
+                dates = [ 
+                    str(x.strftime("%Y-%m-%d")) 
+                    for x in dates[
+                        (dates >= xlims[0]) 
+                        & (dates <= xlims[1])
+                        ] 
+                    ]
 
             for date in dates:
                 if xlims == "auto": 
@@ -428,10 +438,11 @@ class TOLNet(debug.utilities):
                 if df.empty:
                     continue
 
-                time_resolution = kwargs.get("time_resolution", "auto")
-
                 if time_resolution == "auto": 
-                    resolution = np.min([df.index[i] - df.index[i-1] for i in range(1, len(df))])
+                    resolution = np.min([
+                        df.index[i] - df.index[i-1] 
+                        for i in range(1, len(df))
+                        ])
                     df = df.resample(f"{resolution.seconds}s").mean()
                 else: 
                     df = df.resample(f"{time_resolution}").mean()
@@ -446,8 +457,6 @@ class TOLNet(debug.utilities):
             
             params["fig.colorbar"]["mappable"] = im
 
-            plot_utilities.apply_plot_params(fig, ax, **params)
-
             plot_utilities.apply_datetime_axis(ax)
 
             if self.watermark: 
@@ -456,6 +465,8 @@ class TOLNet(debug.utilities):
             if self.nrt is True: 
                 plot_utilities.apply_near_real_time(ax)
             
+            plot_utilities.apply_plot_params(fig, ax, **params)
+
             plt.show()
         return 
     
@@ -467,22 +478,79 @@ if __name__ == "__main__":
     tolnet.instrument_groups
     tolnet.processing_types
 
-    date_start = "2024-08-08"
-    date_end = "2024-08-09"
+    date_start = "2025-07-28"
+    date_end = "2025-08-01"
     product_IDs = [4]
 
-    data = tolnet.import_data(
+    tolnet.import_data(
         min_date=date_start, 
         max_date=date_end, 
         product_type=product_IDs, 
         GEOS_CF=False
         )
 
-    translator = str.maketrans({c: "_" for c in string.punctuation})
+    # time_resolution="30min", xlims=["2025-07-28", "2025-08-01"]
 
-    tolnet.tolnet_curtain_plot(data.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '40.89x-111.89')])
-
-
+    tolnet.plot_curtain(tolnet.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '39.24x-76.363')], )
 
 
 
+#%% 
+
+# data = tolnet.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '39.24x-76.363')]
+
+# datetime_start = "2025-07-29 16:30"
+# datetime_end = "2025-08-01 00:00"
+
+# params = useful_functions.merge_dicts(self.plot_params, kwargs)
+# xlims = params.pop("xlims", "auto")
+# time_resolution = params.pop("time_resolution", "auto")
+
+# cmap, norm = colorbars.tolnet_ozone()
+
+# with plt.rc_context(tolnet.plot_theme):
+#     fig, ax = plt.subplots()
+
+#     dates = sorted(list(data.keys()))
+
+#     if xlims == "auto": 
+#         pass   
+#     elif isinstance(xlims, list): 
+#         xlims = pd.to_datetime(xlims, utc=True)
+#         xlims = [xlims.min(), xlims.max()]
+#         dates = pd.to_datetime(dates, utc=True)
+#         dates = [ 
+#             str(x.strftime("%Y-%m-%d")) 
+#             for x in dates[
+#                 (dates >= xlims[0]) 
+#                 & (dates <= xlims[1])
+#                 ] 
+#             ]
+
+#     for date in dates:
+#         if xlims == "auto": 
+#             df = data[date].copy()
+#         else:
+#             df = data[date].copy()[xlims[0]:xlims[1]]
+
+#         if df.empty:
+#             continue
+
+#         if time_resolution == "auto": 
+#             resolution = np.min([
+#                 df.index[i] - df.index[i-1] 
+#                 for i in range(1, len(df))
+#                 ])
+#             df = df.resample(f"{resolution.seconds}s").mean()
+#         else: 
+#             df = df.resample(f"{time_resolution}").mean()
+
+#     plot_utilities.apply_plot_params(fig, ax, **params)
+
+#     if self.watermark: 
+#         plot_utilities.apply_watermark(fig, self.watermark)
+    
+#     if self.nrt is True: 
+#         plot_utilities.apply_near_real_time(ax)
+    
+#     plt.show()

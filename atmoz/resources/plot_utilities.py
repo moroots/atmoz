@@ -91,12 +91,14 @@ def apply_plot_params(fig, ax, **params):
         return result
 
     for func_name, kwargs in params.items():
-        obj, attr = func_name.split(".")
-        if obj == "ax":
-            target = getattr(ax, attr, None)
-        elif obj == "fig":
-            target = getattr(fig, attr, None)
-
+        try: 
+            obj, attr = func_name.split(".")
+            if obj == "ax":
+                target = getattr(ax, attr, None)
+            elif obj == "fig":
+                target = getattr(fig, attr, None)
+        except: 
+            continue
         if target is not None: 
             if isinstance(kwargs, dict) and "sub_functions" in kwargs.keys(): 
                 sub_functions = kwargs.pop("sub_functions", {})
