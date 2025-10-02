@@ -43,12 +43,16 @@ atmoz/
 │   └── TOLNet.py
 ├── models/
 │   └── geos_cf.py
-└── resources/
-    ├── colorbars.py
-    ├── debug.py
-    ├── default_plot_params.py
-    ├── plot_utilities.py
-    └── useful_functions.py
+├── resources/
+│   ├── atmoz_dataclasses.py
+│   ├── colorbars.py
+│   ├── debug.py
+│   ├── default_plot_params.py
+│   ├── plot_utilities.py
+│   └── useful_functions.py
+└── surface/
+    ├── AirNow.py
+    └── EPA_AirNow.ipynb
  ``` 
 <!-- END FILETREE -->
 
