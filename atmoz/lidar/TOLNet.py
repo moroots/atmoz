@@ -497,60 +497,86 @@ if __name__ == "__main__":
 
 #%% 
 
-# data = tolnet.data[('NASA JPL SMOL-2', 'Centrally Processed (GLASS)', '39.24x-76.363')]
+    def import_data(self, date_start, date_end, **kwargs):
+        """
+        Parameters
+        ----------
+        min_date : String
+            The starting date to take from. Formatted as YYYY-MM-DD.
+        max_date: String
+            The ending date to take data from. Formatted as YYYY-MM-DD.
 
-# datetime_start = "2025-07-29 16:30"
-# datetime_end = "2025-08-01 00:00"
+        """
+        params = {"GEOS_CF": False}
+        params.update(kwargs)
 
-# params = useful_functions.merge_dicts(self.plot_params, kwargs)
-# xlims = params.pop("xlims", "auto")
-# time_resolution = params.pop("time_resolution", "auto")
+        def process_file(file_name, file_id):
+            meta_data = self._json_to_dict(file_id)
+            data = self._unpack_data(meta_data)
+            data.index = self._add_timezone(data.index.to_list())
+            return file_name, meta_data, data
 
-# cmap, norm = colorbars.tolnet_ozone()
+        files = self.get_files_list(date_start, date_end)
+        self.files = (
+            filter_files(files, self.processing_types)
+            .daterange(**kwargs)
+            .instrument_group(**kwargs)
+            .product_type(**kwargs)
+            .file_type(**kwargs)
+            .processing_type(**kwargs)
+            .df
+            )
 
-# with plt.rc_context(tolnet.plot_theme):
-#     fig, ax = plt.subplots()
+        self.request_dates = (date_start, date_end)
+        self.meta_data = {}
 
-#     dates = sorted(list(data.keys()))
+        # Use ThreadPoolExecutor for multithreading
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_to_file = {
+                executor.submit(process_file, file_name, file_id): file_name
+                for file_name, file_id in zip(self.files["file_name"], self.files["id"])
+                }
 
-#     if xlims == "auto": 
-#         pass   
-#     elif isinstance(xlims, list): 
-#         xlims = pd.to_datetime(xlims, utc=True)
-#         xlims = [xlims.min(), xlims.max()]
-#         dates = pd.to_datetime(dates, utc=True)
-#         dates = [ 
-#             str(x.strftime("%Y-%m-%d")) 
-#             for x in dates[
-#                 (dates >= xlims[0]) 
-#                 & (dates <= xlims[1])
-#                 ] 
-#             ]
+            for future in tqdm(as_completed(future_to_file),
+                               total=len(future_to_file),
+                               desc="Downloading TOLNet Data for",
+                               ncols=100
+                               ):
+                
+                file_name = future_to_file[future]
+                try:
+                    file_name, meta_data, data = future.result()
 
-#     for date in dates:
-#         if xlims == "auto": 
-#             df = data[date].copy()
-#         else:
-#             df = data[date].copy()[xlims[0]:xlims[1]]
+                    lat_lon = (
+                        str(meta_data["LATITUDE.INSTRUMENT"])
+                        + "x"
+                        + str(meta_data["LONGITUDE.INSTRUMENT"])
+                        )
+                    date = meta_data["fileInfo"]["start_data_date"].split(" ")[0]
+                    key = (
+                        meta_data["fileInfo"]["instrument_group_name"],
+                        meta_data["fileInfo"]["processing_type_name"],
+                        lat_lon,
+                        )
 
-#         if df.empty:
-#             continue
+                    if key not in self.data.keys():
+                        self.data[key] = {}
+                        self.meta_data[key] = {}
 
-#         if time_resolution == "auto": 
-#             resolution = np.min([
-#                 df.index[i] - df.index[i-1] 
-#                 for i in range(1, len(df))
-#                 ])
-#             df = df.resample(f"{resolution.seconds}s").mean()
-#         else: 
-#             df = df.resample(f"{time_resolution}").mean()
+                    self.data[key][date] = data
+                    self.meta_data[key][file_name] = meta_data
 
-#     plot_utilities.apply_plot_params(fig, ax, **params)
+                except Exception as e:
+                    self.troubleshoot["TOLNet"].append(f"Error processing file {file_name}: {e}")
 
-#     if self.watermark: 
-#         plot_utilities.apply_watermark(fig, self.watermark)
-    
-#     if self.nrt is True: 
-#         plot_utilities.apply_near_real_time(ax)
-    
-#     plt.show()
+        if params["GEOS_CF"]:
+            keys = list(self.data.keys())
+            for key in keys:
+                lat_lon = key[2]
+                models.geos_cf().get_geos_data_multithreaded(
+                    lat_lon, 
+                    self.request_dates[0], 
+                    self.request_dates[1]
+                    )
+
+        return self

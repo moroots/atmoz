@@ -199,12 +199,11 @@ class AirNow:
         metadata["id"] = metadata.index
         return metadata
 
-    def _nest(
-        self, 
-        df: pd.DataFrame, 
-        metadata: pd.DataFrame, 
-        **kwargs
-    ) -> Dict[str, Dict[Any, pd.DataFrame]]:
+    def _nest(self,
+              df: pd.DataFrame,
+              metadata: pd.DataFrame,
+              **kwargs
+              ) -> Dict[str, Dict[Any, pd.DataFrame]]:
         """
         Nest air quality measurements by pollutant and station ID.
 
@@ -242,12 +241,11 @@ class AirNow:
 
         return data
 
-    def import_data(
-        self, 
-        date_start: Optional[Union[str, datetime]] = None, 
-        date_end: Optional[Union[str, datetime]] = None, 
-        **kwargs
-    ) -> Tuple[Dict[str, Dict[Any, pd.DataFrame]], pd.DataFrame]:
+    def import_data(self,
+                    date_start: Optional[Union[str, datetime]] = None,
+                    date_end: Optional[Union[str, datetime]] = None,
+                    **kwargs
+                    ) -> Tuple[Dict[str, Dict[Any, pd.DataFrame]], pd.DataFrame]:
         """
         Imports data from the AirNow API within a specified date range and returns the dataset along with its metadata.
 
@@ -292,7 +290,6 @@ class AirNow:
         ]
         
         data: pd.DataFrame = pd.concat(list_of_dfs) if len(list_of_dfs) > 1 else list_of_dfs[0]
-        data.reset_index(drop=True, inplace=True)
         metadata: pd.DataFrame = self._metadata(data)
         dataset: Dict[str, Dict[Any, pd.DataFrame]] = self._nest(data, metadata)
         return dataset, metadata
