@@ -21,6 +21,9 @@ dependencies = [
     "tqdm"
 ]
 
+[project.scripts]
+atmoz-project = "atmoz.resources.projects:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["atmoz*"]
