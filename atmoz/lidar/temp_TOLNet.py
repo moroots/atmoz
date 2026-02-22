@@ -16,11 +16,15 @@ from urllib.parse import urljoin, urlencode, urlparse, urlunparse
 from datetime import datetime
 import pandas as pd
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from functools import cached_property, cache
 from typing import Any, Dict, List, Literal, Optional, Type, Union
 from pydantic import BaseModel, ValidationError, Field, field_validator, model_validator, ConfigDict
 import requests
 import yaml
+
+from pathlib import Path
 
 
 components = namedtuple(
@@ -280,38 +284,133 @@ class TOLNET:
             )
 
     def _get_files_list(self, **params):
+        """
+        Fetch TOLNet file list using a session for connection reuse.
+        """
         query = TOLNET_DATA_QUERY(**params)
-        i = 1
-        url = urlunparse(
-            components(
-                scheme="https",
-                netloc="tolnet.larc.nasa.gov",
-                path=f"/api/data/{i}",
-                params="",
-                query=urlencode(query.model_dump( exclude_none=True)),
-                fragment=""
-            )
-        )
-        response = requests.get(url)
-        data_frames = []
-        while response.status_code == 200:
-            data_frames.append(pd.DataFrame(response.json()))
-            i += 1
-            url = urlunparse(
-            components(
-                scheme="https",
-                netloc="tolnet.larc.nasa.gov",
-                path=f"/api/data/{i}",
-                params="",
-                query=urlencode(query.model_dump( exclude_none=True)),
-                fragment=""
-                )
-            )
-            response = requests.get(url)
-
-        df = pd.concat(data_frames, ignore_index=True)
-        df["start_data_date"] = pd.to_datetime(df["start_data_date"])
-        df["end_data_date"] = pd.to_datetime(df["end_data_date"])
-        df["upload_date"] = pd.to_datetime(df["upload_date"])
+        query_dict = query.model_dump(exclude_none=True)  # encode once
         
+        URL_PATH = r"/data"
+
+        session = requests.Session()  # reuse TCP connection
+        data_frames = []
+        page = 1
+
+        while True:
+            url = f"{self.base_url}{URL_PATH}/{page}"
+            response = session.get(url, params=query_dict, timeout=10)
+
+            if response.status_code != 200:
+                break
+
+            json_data = response.json()
+            if not json_data:  # stop if page is empty
+                break
+
+            data_frames.append(pd.DataFrame(json_data))
+            page += 1
+
+        if not data_frames:
+            return pd.DataFrame().astype(self.file_list_dtypes)
+
+        # Combine all pages into one DataFrame
+        df = pd.concat(data_frames, ignore_index=True)
+
+        # Convert date columns
+        for col in ["start_data_date", "end_data_date", "upload_date"]:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+
         return df.astype(self.file_list_dtypes)
+
+    def download(self, **params) -> dict:
+        
+        json = params.pop("json", True)
+
+        URL_PATH = r"/data/download"
+        if json: 
+            URL_PATH = r"/data/json"
+
+        files_list = self._get_files_list(**params)
+        if files_list.empty:
+            print("No files found for the given query parameters.")
+            return {}
+        
+    def _download(self, file_id: Union[int, str], url_path: str): 
+        url = f"{self.base_url}{url_path}/{file_id}"
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            return file_id, response.content
+        else:
+            print(f"Failed to download file with id {file_id}. Status code: {response.status_code}")
+            return file_id, None
+
+    def download_files(self, files_list, dest_dir="downloads", file_type="json"):
+        """
+        Sequential download of files from TOLNet using pathlib for paths.
+        """
+        dest_dir = Path(dest_dir)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        session = requests.Session()  # reuse TCP connection
+
+        for idx, file_id in enumerate(files_list.id, start=1):
+            if file_type == "json":
+                url = f"{self.base_url}/data/json/{file_id}"
+                ext = "json"
+            elif file_type == "hdf":
+                url = f"{self.base_url}/data/download/{file_id}"
+                ext = "hdf"
+            else:
+                raise ValueError("file_type must be 'json' or 'hdf'")
+
+            dest_path = dest_dir / f"{file_id}.{ext}"
+
+            try:
+                r = session.get(url, timeout=30)
+                r.raise_for_status()
+                dest_path.write_bytes(r.content)
+            except requests.RequestException as e:
+                print(f"[{idx}/{len(files_list)}] Failed to download {file_id}: {e}")
+            else:
+                print(f"[{idx}/{len(files_list)}] Downloaded {file_id}")
+
+    def download_files_threaded(self, files_list, dest_dir="downloads", file_type="json", max_workers=8):
+        """
+        Parallel download of files from TOLNet using threads and pathlib.
+        """
+        dest_dir = Path(dest_dir)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        session = requests.Session()
+
+        def download_one(file_id):
+            if file_type == "json":
+                url = f"{self.base_url}/data/json/{file_id}"
+                ext = "json"
+            elif file_type == "hdf":
+                url = f"{self.base_url}/data/download/{file_id}"
+                ext = "hdf"
+            else:
+                raise ValueError("file_type must be 'json' or 'hdf'")
+
+            dest_path = dest_dir / f"{file_id}.{ext}"
+
+            try:
+                r = session.get(url, timeout=30)
+                r.raise_for_status()
+                dest_path.write_bytes(r.content)
+            except requests.RequestException as e:
+                return file_id, False, str(e)
+            return file_id, True, None
+
+        results = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(download_one, fid): fid for fid in files_list.id}
+            for future in as_completed(futures):
+                fid, success, error = future.result()
+                if success:
+                    print(f"Downloaded {fid}")
+                else:
+                    print(f"Failed {fid}: {error}")
+                results.append((fid, success, error))
+
+        return results
