@@ -42,23 +42,25 @@ class EarthData:
             )
         return 
 
-    def _set_credentials(self, earth_data_login: EarthDataLogin):
-        os.environ["EARTHDATA_USERNAME"] = earth_data_login.username
-        os.environ["EARTHDATA_PASSWORD"] = earth_data_login.password.get_secret_value()
+    def _write_netrc(self, earth_data_login: EarthDataLogin):
+        for path in self.netrc_paths: 
+            with open(path, "w") as f:
+                f.write(f"machine urs.earthdata.nasa.gov login {earth_data_login.username} password {earth_data_login.password.get_secret_value()}\n")
     
     def _login(self, earth_data_login: EarthDataLogin = None):
         netrc_path = next((p for p in self.netrc_paths if p.exists()), None)
         if netrc_path and netrc_path.exists():
-            temp = earthaccess.login(strategy="netrc", persist=True)
+            pass
         else: 
             if earth_data_login:
-                self._set_credentials(earth_data_login)
-                temp = earthaccess.login(strategy="environment", persist=True)
+                self._write_netrc(earth_data_login)
             else: 
-                raise FileNotFoundError("No .netrc file found and no credentials (username, password) provided. \n Please provide credentials (username, password) or create a .netrc file.")
+                raise FileNotFoundError(f"{self.__class__.__name__}: No .netrc file found and no credentials (username, password) provided. \n Please provide credentials (username, password) or create a .netrc file.")
             
+        temp = earthaccess.login(strategy="netrc", persist=True)
+
         if not temp.authenticated:
-            raise PermissionError("Authentication failed. Please check your credentials.")
+            raise PermissionError(f"{self.__class__.__name__}: Authentication failed. Please check your credentials.")
         self.auth = temp
 
     def get_short_names(self, keyword: str = "TEMPO_*", count: int = -1):
