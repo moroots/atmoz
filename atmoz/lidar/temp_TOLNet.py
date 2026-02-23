@@ -26,6 +26,8 @@ import yaml
 
 from pathlib import Path
 
+from atmoz.data_access.NASA import EarthData
+
 
 components = namedtuple(
     typename ='components', 
@@ -351,7 +353,8 @@ class TOLNET:
         """
         dest_dir = Path(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
-        session = requests.Session()  # reuse TCP connection
+        temp = EarthData()  # reuse TCP connection
+        session = temp.auth.get_session()
 
         for idx, file_id in enumerate(files_list.id, start=1):
             if file_type == "json":
@@ -380,7 +383,13 @@ class TOLNET:
         """
         dest_dir = Path(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
-        session = requests.Session()
+        try: 
+            temp = EarthData()  # reuse TCP connection
+        except Exception as e:
+            print(f"Failed to initialize EarthData: {e}"
+                  "\n Perhaps call EarthData() separately to debug authentication issues.")
+
+        session = temp.auth.get_session()
 
         def download_one(file_id):
             if file_type == "json":
