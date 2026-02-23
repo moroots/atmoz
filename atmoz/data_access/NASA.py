@@ -4,30 +4,17 @@ Created on Wed Aug 13 10:02:59 2025
 
 @author: Maurice Roots
 
-A module for working with NASA's EarthAcess
+A module for working with NASA's EarthAccess
 
 """
+#%%
 
 # import earthaccess
-import netCDF4 as nc
 import os
-import platform
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from subprocess import Popen
-import shutil
-import numpy as np
-
-from scipy.interpolate import griddata
-import sys
-
-import json
-
 import pandas as pd
 from pathlib import Path
-
-from custom_utilities import messages
-from custom_utilities.decorators import report, logs
-
-import keyring
 
 try:
     import earthaccess
@@ -36,12 +23,43 @@ except ModuleNotFoundError:
           "Use this link for instruction: "
           "https://earthaccess.readthedocs.io/en/stable/quick-start/"
           )
+    raise ModuleNotFoundError("Please install 'earthaccess' to use this module.")
+
+class EarthDataLogin(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    username: str = Field(description="EarthData username", default=None)
+    password: SecretStr = Field(description="EarthData password", default=None)
 
 class EarthData:
     #This class is largely unfinished
-    def __init__(self):
-        earthaccess.login(persist=True)
-        return
+    def __init__(self, username: str = None, password: str = None):
+        self.netrc_paths = [Path.home() / ".netrc", Path.home() / "_netrc"]
+        self._login(
+            EarthDataLogin(username=username, password=SecretStr(password))
+            if username and password
+            else None
+            )
+        return 
+
+    def _set_credentials(self, earth_data_login: EarthDataLogin):
+        os.environ["EARTHDATA_USERNAME"] = earth_data_login.username
+        os.environ["EARTHDATA_PASSWORD"] = earth_data_login.password.get_secret_value()
+    
+    def _login(self, earth_data_login: EarthDataLogin = None):
+        netrc_path = next((p for p in self.netrc_paths if p.exists()), None)
+        if netrc_path and netrc_path.exists():
+            temp = earthaccess.login(strategy="netrc", persist=True)
+        else: 
+            if earth_data_login:
+                self._set_credentials(earth_data_login)
+                temp = earthaccess.login(strategy="environment", persist=True)
+            else: 
+                raise FileNotFoundError("No .netrc file found and no credentials (username, password) provided. \n Please provide credentials (username, password) or create a .netrc file.")
+            
+        if not temp.authenticated:
+            raise PermissionError("Authentication failed. Please check your credentials.")
+        self.auth = temp
 
     def get_short_names(self, keyword: str = "TEMPO_*", count: int = -1):
         response = earthaccess.search_datasets(

@@ -14,6 +14,8 @@ import matplotlib.image as mimg
 from atmoz.resources import useful_functions
 import matplotlib.dates as mdates
 
+from zoneinfo import ZoneInfo
+
 def apply_watermark(fig, filepath, **kwargs):
     params = {
         "add_axes": {
@@ -132,9 +134,11 @@ def apply_near_real_time(ax, **kwargs):
     
     return ax
 
-def apply_datetime_axis(ax):
+def apply_datetime_axis(ax, tz: Optional[str] = "UTC"):
+    if isinstance(tz, str):
+        tz = ZoneInfo(tz)
     locator = mdates.AutoDateLocator()
-    formatter = mdates.ConciseDateFormatter(locator)
+    formatter = mdates.ConciseDateFormatter(locator, tz=tz)
     formatter.formats = [
         '%y',  
         '%b',       
