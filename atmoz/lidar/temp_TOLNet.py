@@ -347,7 +347,7 @@ class TOLNET:
             print(f"Failed to download file with id {file_id}. Status code: {response.status_code}")
             return file_id, None
 
-    def download_files(self, files_list, dest_dir="downloads", file_type="json"):
+    def download_files(self, files_list, dest_dir: str, file_type="json"):
         """
         Sequential download of files from TOLNet using pathlib for paths.
         """
@@ -377,7 +377,7 @@ class TOLNET:
             else:
                 print(f"[{idx}/{len(files_list)}] Downloaded {file_id}")
 
-    def download_files_threaded(self, files_list, dest_dir="downloads", file_type="json", max_workers=8):
+    def download_files_threaded(self, files_list, dest_dir: str, file_type="json", max_workers=8):
         """
         Parallel download of files from TOLNet using threads and pathlib.
         """
