@@ -16,6 +16,8 @@ from subprocess import Popen
 import pandas as pd
 from pathlib import Path
 
+from atmoz.resources.useful_functions import merge_dicts
+
 try:
     import earthaccess
 except ModuleNotFoundError:
@@ -85,11 +87,16 @@ class EarthData:
         return results
 
     def search_data(self, **params):
+        default = {"count": -1}
+        params = merge_dicts(default, params)
         return earthaccess.search_data(**params)
 
-    def download_data(self, search_results, dir_path: str ="./results"):
-        #This function call is weird and slow. tqdm is semi broken.
-        return earthaccess.download(search_results, dir_path)
+    def download_data(self, **params):
+        default = {
+            "local_path": Path(__file__).parent / "data" / "nasa_earth_data",
+            }
+        params = merge_dicts(default, params)
+        return earthaccess.download(**params)
 
 
 #%%
@@ -99,4 +106,4 @@ if __name__ == "__main__":
 
     tempo_search = EarthData().get_short_names()
     tempo_data_search = EarthData().search_data(**params)
-    tempo_data = EarthData().download_data(tempo_data_search, dir_path=r"E:\Projects\atmoz\results")
+    tempo_data = EarthData().download_data(**params)
