@@ -10,6 +10,7 @@
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+desktop.ini
 $RECYCLE.BIN/
 
 # Linux
@@ -142,3 +143,55 @@ logs/
 dist/
 build/
 coverage/
+
+# ===================================
+# DATA / LARGE FILES
+# Ignore common scientific data formats, binary arrays, and DB files
+# ===================================
+# HDF / HDF5
+*.hdf
+*.hdf5
+*.h5
+
+# NetCDF / CDF
+*.nc
+*.nc4
+*.cdf
+
+# GRIB
+*.grib
+*.grb
+*.grib2
+
+# Zarr
+*.zarr
+*.zarr/*
+
+# NumPy / binary arrays
+*.npy
+*.npz
+
+# Parquet / columnar
+*.parquet
+*.feather
+
+# MATLAB / Stata / SPSS / SAS
+*.mat
+*.dta
+*.sav
+*.sas7bdat
+
+# Pickles
+*.pkl
+*.pickle
+
+# Databases / SQL dumps
+*.db
+*.db3
+*.sqlite
+*.sqlite3
+*.sql
+
+# Misc large data
+*.h5part
+*.ncx
