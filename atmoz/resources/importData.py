@@ -19,7 +19,7 @@ import subprocess
 
 from shapely.geometry import Point
 
-from src.timeConversions import h5Dataset_timestamp
+from atmoz.resources.timeConversions import h5Dataset_timestamp
 
 import pickle
 
