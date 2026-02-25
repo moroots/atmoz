@@ -28,6 +28,7 @@ dependencies = [
     "shapely>=2.0.7",
     "plotly>=6.5.2",
     "h5py>=3.11.0",
+    "windrose>=1.9.2",
 ]
 
 [project.scripts]
