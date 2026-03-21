@@ -297,15 +297,15 @@ class AirNow:
         dataset: Dict[str, Dict[Any, pd.DataFrame]] = self._nest(data, metadata)
         return dataset, metadata
 
-    def download_data(
-                date_start: Optional[Union[str, datetime]] = None,
-                date_end: Optional[Union[str, datetime]] = None,
-                output_dir: Optional[Path] = None,
-                max_workers: int = 3,
-                **kwargs
-                ) -> Tuple[Dict[str, Dict[Any, pd.DataFrame]], pd.DataFrame]:
+    def download_data(self,
+                      date_start: Optional[Union[str, datetime]] = None,
+                      date_end: Optional[Union[str, datetime]] = None,
+                      output_dir: Optional[Path] = None,
+                      max_workers: int = 3,
+                      **kwargs
+                      ) -> Path:
         """
-        Imports data from the AirNow API within a specified date range and returns the dataset along with its metadata.
+        Imports data from the AirNow API within a specified date range and saves it to a Parquet file.
 
         Parameters:
             date_start (str or datetime, optional): The start date for data import. If provided with `date_end`, data will be fetched for each day in the range.
@@ -341,7 +341,7 @@ class AirNow:
         temp = []; futures = []
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             for obj in list_of_params_objs:
-                futures.append(executor.submit(AirNow()._pull, **asdict(obj)))
+                futures.append(executor.submit(self._pull, **asdict(obj)))
 
             for future in tqdm(as_completed(futures), total=len(futures), desc="Downloading AirNow data"):
                 try:
