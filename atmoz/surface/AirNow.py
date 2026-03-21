@@ -294,6 +294,7 @@ class AirNow:
         dataset: Dict[str, Dict[Any, pd.DataFrame]] = self._nest(data, metadata)
         return dataset, metadata
 
+    def download_airnow_data():  
 
 if __name__ == "__main__": 
     airnow = AirNow() 

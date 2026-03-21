@@ -92,6 +92,9 @@ composer.lock
 *.secret
 atmoz.egg-info/
 atmoz/.ipynb_checkpoints/
+# Ignore config directory and any files within it
+config/
+config/**
 
 # ===================================
 # IDE / EDITORS
