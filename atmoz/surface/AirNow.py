@@ -26,6 +26,9 @@ from atmoz.resources.useful_functions import merge_dicts
 
 from dataclasses import dataclass, field, fields, MISSING, asdict
 
+from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 @dataclass
 class AirNowParams:
     startDate: str = field(default_factory=lambda: (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%dT%H"))
@@ -294,7 +297,71 @@ class AirNow:
         dataset: Dict[str, Dict[Any, pd.DataFrame]] = self._nest(data, metadata)
         return dataset, metadata
 
-    def download_airnow_data():  
+    def download_data(
+                date_start: Optional[Union[str, datetime]] = None,
+                date_end: Optional[Union[str, datetime]] = None,
+                output_dir: Optional[Path] = None,
+                max_workers: int = 3,
+                **kwargs
+                ) -> Tuple[Dict[str, Dict[Any, pd.DataFrame]], pd.DataFrame]:
+        """
+        Imports data from the AirNow API within a specified date range and returns the dataset along with its metadata.
+
+        Parameters:
+            date_start (str or datetime, optional): The start date for data import. If provided with `date_end`, data will be fetched for each day in the range.
+            date_end (str or datetime, optional): The end date for data import. Used with `date_start` to define the date range.
+            **kwargs: Additional keyword arguments to be passed to the AirNowParams constructor and the internal data pulling method. 
+                - silent (bool, optional): If True (default), displays a progress bar during data download.
+
+        Returns:
+            tuple:
+                - dataset (dict): The processed dataset containing the imported data, nested as required.
+                - metadata (pd.DataFrame): Metadata associated with the imported dataset.
+
+        Notes:
+            - If both `date_start` and `date_end` are not provided, data is imported for the default parameters specified in `kwargs`.
+            - Uses tqdm for progress indication if `silent` is True.
+        """
+        silent = kwargs.pop("silent", True)
+
+        list_of_params_objs: List[AirNowParams] = []
+        if date_start and date_end: 
+            date_range = [t.strftime("%Y-%m-%dT%H") for t in pd.date_range(start=date_start, end=date_end, freq="1D")]
+            list_of_params_objs.extend([
+                AirNowParams(
+                    startDate=date_range[i-1], 
+                    endDate=date_range[i], 
+                    **kwargs
+                    ) 
+                for i in range(1, len(date_range))
+                ])
+        else: 
+            list_of_params_objs.extend([AirNowParams(**kwargs)])
+
+        temp = []; futures = []
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            for obj in list_of_params_objs:
+                futures.append(executor.submit(AirNow()._pull, **asdict(obj)))
+
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Downloading AirNow data"):
+                try:
+                    df = pd.DataFrame(future.result().json())
+                    temp.append(df)
+                except Exception as e:
+                    print(f"An error occurred: {e}")
+
+        df = pd.concat(temp, ignore_index=True)
+        full_query = AirNowParams(startDate=date_start, endDate=date_end, **kwargs)
+        df.attrs = {"query_params": asdict(full_query)}
+        filename = f"airnow_api_query_{date_start}_{date_end}.parquet"
+        if output_dir:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            filepath = output_dir / filename
+        else: 
+            filepath = Path(".") / filename
+        
+        df.to_parquet(filepath, index=False)
+        return filepath
 
 if __name__ == "__main__": 
     airnow = AirNow() 
