@@ -19,7 +19,6 @@ import warnings
 
 from importlib.resources import files
 
-
 SCHEMA = {
     "machines": """
 CREATE TABLE IF NOT EXISTS machines (
@@ -70,7 +69,7 @@ class PathManager:
             self.path_file = Path(paths_file)
         else:
             # convert resource to a filesystem Path string and wrap with Path
-            self.path_file = Path(str(files("atmoz.config").joinpath("atmoz.paths")))
+            self.path_file = Path(__file__).parent / "config" / "atmoz.paths"
 
         # ensure parent dirs exist
         self.path_file.parent.mkdir(parents=True, exist_ok=True)
