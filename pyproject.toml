@@ -30,7 +30,6 @@ dependencies = [
     "h5py>=3.11.0",
     "windrose>=1.9.2",
     "beautifulsoup4>=4.14.3",
-    "tzfpy>=0.15.6",
     "netcdf4>=1.7.2"
 ]
 
