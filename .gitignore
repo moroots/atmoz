@@ -95,6 +95,7 @@ atmoz/.ipynb_checkpoints/
 # Ignore config directory and any files within it
 config/
 config/**
+uv.lock 
 
 # ===================================
 # IDE / EDITORS

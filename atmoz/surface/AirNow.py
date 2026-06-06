@@ -7,6 +7,7 @@ Created on 2025-10-02 09:24:37
 Description:
      - Pulling Data from the AirNow API
 """
+#%% 
 
 # Importing Packages
 
@@ -22,12 +23,116 @@ import numpy as np
 from tqdm import tqdm
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from atmoz.resources.useful_functions import merge_dicts
+from atmoz.resources import useful_functions as utils
 
 from dataclasses import dataclass, field, fields, MISSING, asdict
 
 from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+import io
+
+_BASE_URL_AQS     = "https://aqs.epa.gov/aqsweb/airdata"
+_BASE_URL_AIRNOW  = "https://www.airnowapi.org/aq/data/"
+
+
+EPA_PARAMETERS = {
+    "ozone":           {"code": "44201",           "hourly": True,  "daily": True,  "8hour": True,  "annual": False},
+    "so2":             {"code": "42401",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "co":              {"code": "42101",           "hourly": True,  "daily": True,  "8hour": True,  "annual": False},
+    "no2":             {"code": "42602",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pm25":            {"code": "88101",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pm25_frm":        {"code": "88101",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pm25_nonfrm":     {"code": "88502",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pm10":            {"code": "81102",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pmc":             {"code": "86101",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pm25_spec":       {"code": "SPEC",            "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pm10_spec":       {"code": "PM10SPEC",        "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "wind":            {"code": "WIND",            "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "temp":            {"code": "TEMP",            "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pressure":        {"code": "PRESS",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "rh_dp":           {"code": "RH_DP",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "haps":            {"code": "HAPS",            "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "vocs":            {"code": "VOCS",            "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "nonoxnoy":        {"code": "NONOxNOy",        "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "lead":            {"code": "LEAD",            "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "aqi_by_cbsa":     {"code": "aqi_by_cbsa",     "hourly": False, "daily": True,  "8hour": False, "annual": True},
+    "aqi_by_county":   {"code": "aqi_by_county",   "hourly": False, "daily": True,  "8hour": False, "annual": True},
+    "conc_by_monitor": {"code": "conc_by_monitor", "hourly": False, "daily": False, "8hour": False, "annual": True},
+}
+
+class EPA_PREGEN:
+
+    def __init__(self):
+        self.parameters = EPA_PARAMETERS
+        self.base_url_aqs = _BASE_URL_AQS
+        return
+    
+    @classmethod
+    def _download_single(cls, 
+                         resolution: str,
+                         parameter: str, 
+                         year: int, 
+                         session: requests.Session
+                         ) -> pd.DataFrame:
+        try:
+            url = f"{cls.base_url_aqs}/{resolution}_{parameter}_{year}.zip"
+            zip_file = utils.download_zip(url, session)
+            with zip_file.open(f"{resolution}_{parameter}_{year}.csv") as f:
+                df = pd.read_csv(f, low_memory=False)
+            return df
+        except Exception as e:
+            print(f"Error downloading {parameter} at {resolution} resolution for year {year}: {e}")
+            
+    def download(parameters: Union[str, List],
+                 resolutions: Union[str, List], 
+                 years: Union[int, List],
+                 output_dir: Optional[Path] = Path("./"),
+                 save_as_parquet: bool = True,
+                 **kwargs
+                 ):
+
+        session = requests.Session()
+        
+        #check that combinations of parameters are valid
+        if isinstance(parameters, str):
+            parameters = [parameters]
+        if isinstance(resolutions, str):
+            resolutions = [resolutions]
+        if isinstance(years, int):
+            years = [years]
+
+        # Validate (parameter, resolution) combinations
+        parameters = ["Ozone", "NO2", "44201"]
+        resolutions = ["hourly", "daily", "annual"]
+        years = ["2025", "2024"]
+
+        param_codes = []
+        res_combos = []
+        for p in parameters: 
+            if p.isdigit(): 
+                param_codes.append(p)
+            else:      
+                param_codes.append(EPA_PARAMETERS[p.lower()]["code"])
+
+
+        param_codes = np.unique(param_codes)
+
+        for p in param_codes: 
+            for r in resolutions: 
+                res_bool = next(v[r] for v in EPA_PARAMETERS.values() if v["code"] == p)
+                if res_bool:
+                    res_combos.append(f"{r}_{p}")
+                else: 
+                    print(f"Parameter: {p} does not have Resolution: {r}")
+
+        zip_filenames = [f"{r}_{y}.zip" for r in res_combos for y in years]
+
+
+        return
+
+# ---------------------------------------- #
+# AirNow API Handler Class
+# ---------------------------------------- #
 
 @dataclass
 class AirNowParams:
@@ -52,6 +157,9 @@ class AirNowParams:
                     setattr(self, f.name, f.default_factory())
                 elif f.default is not MISSING:
                     setattr(self, f.name, f.default)
+        return
+
+
 
 class AirNow:
     """
@@ -363,6 +471,7 @@ class AirNow:
         df.to_parquet(filepath, index=False)
         return filepath
 
+#%%
 if __name__ == "__main__": 
     airnow = AirNow() 
     dataset, metadata = airnow.import_data()

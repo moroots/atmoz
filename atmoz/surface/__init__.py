@@ -1,1 +1,1 @@
-from .AirNow import AirNow
+from .AirNow import AirNow, EPA_PREGEN
