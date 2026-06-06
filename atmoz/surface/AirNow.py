@@ -77,9 +77,13 @@ class EPA_PREGEN:
         try:
             url = f"{cls.base_url_aqs}/{resolution}_{parameter}_{year}.zip"
             zip_file = utils.download_zip(url, session)
-            with zip_file.open(f"{resolution}_{parameter}_{year}.csv") as f:
+            filename = f"{resolution}_{parameter}_{year}.csv"
+
+            with zip_file.open(filename) as f:
                 df = pd.read_csv(f, low_memory=False)
-            return df
+
+            return df, filename
+        
         except Exception as e:
             print(f"Error downloading {parameter} at {resolution} resolution for year {year}: {e}")
             
@@ -117,9 +121,12 @@ class EPA_PREGEN:
 
         param_codes = np.unique(param_codes)
 
+        # build O(1) lookup from AQS code -> parameter dict
+        code_map = {v["code"]: v for v in EPA_PARAMETERS.values()}
+
         for p in param_codes: 
             for r in resolutions: 
-                res_bool = next(v[r] for v in EPA_PARAMETERS.values() if v["code"] == p)
+                res_bool = code_map.get(p, {}).get(r, False)
                 if res_bool:
                     res_combos.append(f"{r}_{p}")
                 else: 
@@ -480,3 +487,44 @@ if __name__ == "__main__":
     print(metadata.head())
     print("\nDataset keys (pollutants):")
     print(dataset.keys())
+
+# %%
+
+def download_temp(parameters, resolutions, years, output_dir=None, save_as_parquet=True, **kwargs):
+
+    session = requests.Session()
+
+    # O(1) lookup from Parameter Code -> Resolutions
+    code_map = {v["code"]: v for v in EPA_PARAMETERS.values()}
+
+    params_combos = []
+    for y in years: 
+        for p in parameters: 
+            for r in resolutions: 
+
+                if not p.isdigit():
+                    p = EPA_PARAMETERS[p.lower()]["code"]
+                
+                res_bool = code_map.get(p, {}).get(r, False)
+                if res_bool:
+                    params_combos.append({
+                        "resolution": r,
+                        "parameter": p,
+                        "year": y,
+                        "session": session,
+                        })
+                else: 
+                    print(f"Parameter: {p} does not have Resolution: {r}")
+    
+    with ThreadPoolExecutor(max_workers=kwargs.get("max_workers", 5)) as executor:
+        futures = [executor.submit(EPA_PREGEN._download_single, **combo) for combo in params_combos]
+        results = {}
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Downloading data"):
+            try:
+                df, filename = future.result()
+                results[filename] = df
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
+    return results
+
