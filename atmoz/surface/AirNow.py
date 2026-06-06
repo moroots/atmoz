@@ -61,11 +61,11 @@ EPA_PARAMETERS = {
 }
 
 class EPA_PREGEN:
+    parameters = EPA_PARAMETERS
+    base_url_aqs = _BASE_URL_AQS
 
     def __init__(self):
-        self.parameters = EPA_PARAMETERS
-        self.base_url_aqs = _BASE_URL_AQS
-        return
+        pass
     
     @classmethod
     def _download_single(cls, 
