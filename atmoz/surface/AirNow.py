@@ -31,7 +31,28 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import io
 
-_BASE_URL_AQS     = "https://aqs.epa.gov/aqsweb/airdata"
+from __future__ import annotations
+ 
+from atmoz.resources.sessionHandler import SessionHandler
+from atmoz.resources.parallelExecutor import ParallelExecutor, JobResult
+ 
+ 
+# ---------------------------------------------------------------------------
+# Module-level session handler — one instance, shared across all threads.
+# Each thread transparently gets its own requests.Session via threading.local.
+# ---------------------------------------------------------------------------
+_session_handler = SessionHandler(
+    pool_connections=10,
+    pool_maxsize=10,
+    max_retries=3,
+    backoff_factor=0.5,
+    timeout=(5.0, 60.0),
+    )
+
+# ---------------------------------------------------------------------------
+# Endpoints and parameter mappings for EPA PreGenerated (AQS) and AirNow API.
+# ---------------------------------------------------------------------------
+_BASE_URL_AQS     = "https://aqs.epa.gov/aqsweb/airdata/"
 _BASE_URL_AIRNOW  = "https://www.airnowapi.org/aq/data/"
 
 
@@ -60,87 +81,200 @@ EPA_PARAMETERS = {
     "conc_by_monitor": {"code": "conc_by_monitor", "hourly": False, "daily": False, "8hour": False, "annual": True},
 }
 
-class EPA_PREGEN:
+class __epa_pregen:
+    """
+    Simple class to efficiently handle downloading and processing the EPA PreGenerated Files.
+
+    Downloads are executed in parallel using 'atmoz.resources.parallelExecutor' (mode ="threads"). 
+    HTTP sessions are manaded by 'atmoz.resources.sessionHandler' to ensure thread safety and efficient connection pooling.
+    """
+
     parameters = EPA_PARAMETERS
     base_url_aqs = _BASE_URL_AQS
-
-    def __init__(self):
-        pass
+           
+    # O(1) lookup from Parameter Code -> Resolutions
+    param_code_map = {
+        v["code"]: v for v in EPA_PARAMETERS.values()
+        }
     
+    def __init__(self) -> None:
+        pass
+
+    # - Validation of Parameter <-> Reslution Combos - #
     @classmethod
-    def _download_single(cls, 
-                         resolution: str,
-                         parameter: str, 
-                         year: int, 
-                         session: requests.Session
-                         ) -> pd.DataFrame:
-        try:
-            url = f"{cls.base_url_aqs}/{resolution}_{parameter}_{year}.zip"
-            zip_file = utils.download_zip(url, session)
-            filename = f"{resolution}_{parameter}_{year}.csv"
+    def _parameters_validator(cls, 
+                               parameters: Union[str, List],
+                               resolutions: Union[str, List],
+                               years: Union[int, List],
+                               **kwargs
+                               ) -> List[Dict[str, Any]]:
 
-            with zip_file.open(filename) as f:
-                df = pd.read_csv(f, low_memory=False)
+        """
+        Validation of Parameter <-> Resolution Combos for EPA PreGenerated Files.
+        Depends on 'EPA_PARAMETERS' as a quikc lookup for valid combinations.
 
-            return df, filename
-        
-        except Exception as e:
-            print(f"Error downloading {parameter} at {resolution} resolution for year {year}: {e}")
-            
-    def download(parameters: Union[str, List],
-                 resolutions: Union[str, List], 
-                 years: Union[int, List],
-                 output_dir: Optional[Path] = Path("./"),
-                 save_as_parquet: bool = True,
-                 **kwargs
-                 ):
+        Returns a list of job dicts ready to be passed directly to the parallel executor,
+        with keys: "resolution", "parameter", "year". 
+        """
+        if not kwargs.get("silent", True):
+            print("Validating parameter-resolution-year combinations...")
 
-        session = requests.Session()
-        
-        #check that combinations of parameters are valid
         if isinstance(parameters, str):
             parameters = [parameters]
         if isinstance(resolutions, str):
             resolutions = [resolutions]
         if isinstance(years, int):
             years = [years]
+        
+        seen: set[tuple] = set()
+        combos: List[Dict[str, Any]] = []
 
-        # Validate (parameter, resolution) combinations
-        parameters = ["Ozone", "NO2", "44201"]
-        resolutions = ["hourly", "daily", "annual"]
-        years = ["2025", "2024"]
+        for y in years: 
+            for p in parameters: 
+                for r in resolutions: 
 
-        param_codes = []
-        res_combos = []
-        for p in parameters: 
-            if p.isdigit(): 
-                param_codes.append(p)
-            else:      
-                param_codes.append(EPA_PARAMETERS[p.lower()]["code"])
+                    if not p.isdigit():
+                        p = cls.parameters[p.lower()]["code"]
+                    
+                    # No Duplicates
+                    key = (r, p, y)
+                    if key in seen:
+                        continue
+                    seen.add(key)
 
+                    if cls.param_code_map.get(p, {}).get(r, False):
+                        combos.append({
+                            "resolution": r,
+                            "parameter": p,
+                            "year": y
+                            })
+                    else:
+                        if not kwargs.get("silent", True): 
+                            print(f"Parameter: {p} does not have Resolution: {r}")
+        
+        if not kwargs.get("silent", True):
+            print(f"Validation complete. {len(combos)} valid combinations found.")
+            for combo in combos:
+                print(f"  [VALID] {combo['parameter']} at {combo['resolution']} resolution for {combo['year']}")
 
-        param_codes = np.unique(param_codes)
+        return combos
 
-        # build O(1) lookup from AQS code -> parameter dict
-        code_map = {v["code"]: v for v in EPA_PARAMETERS.values()}
+    # ------------------------------------------------------------------
+    # Single-file download  (plain classmethod — called by the executor)
+    # ------------------------------------------------------------------
+    @classmethod
+    def _download_single(cls, 
+                         resolution: str,
+                         parameter: str, 
+                         year: int, 
+                         session_handler = _session_handler,
+                         **kwargs
+                         ) -> pd.DataFrame:
+        
+        """Download one ZIP file and return a ``JobReturn`` dict.
+ 
+        The HTTP session is obtained from the module-level ``SessionHandler``.
+        Each worker thread automatically receives its own ``requests.Session``
+        via ``threading.local``; no session is passed through the job dict
+        (sessions are not serialisable and must not cross thread boundaries
+        as shared objects).
+ 
+        Returns
+        -------
+        dict
+            ``{"key": filename, "value": DataFrame}`` — the ``JobReturn``
+            contract expected by ``ParallelExecutor``.
+        """
 
-        for p in param_codes: 
-            for r in resolutions: 
-                res_bool = code_map.get(p, {}).get(r, False)
-                if res_bool:
-                    res_combos.append(f"{r}_{p}")
-                else: 
-                    print(f"Parameter: {p} does not have Resolution: {r}")
+        if not kwargs.get("silent", True):
+            print(f"Downloading {parameter} at {resolution} resolution for {year}...")
 
-        zip_filenames = [f"{r}_{y}.zip" for r in res_combos for y in years]
+        session = session_handler.session() 
+        url = f"{cls.base_url_aqs}/{resolution}_{parameter}_{year}.zip"
+        filename = f"{resolution}_{parameter}_{year}.csv"
 
+        zip_file = utils.download_zip(url, session)
+        with zip_file.open(filename) as f:
+            df = pd.read_csv(f, low_memory=False)
 
-        return
+        return {"key": filename, "value": df}
+
+    # ------------------------------------------------------------------
+    # Parallel Downloader
+    # ------------------------------------------------------------------
+    @classmethod
+    def _download(cls,
+                  parameters: Union[str, List[str]],
+                  resolutions: Union[str, List[str]],
+                  years: Union[int, List[int]],
+                  max_workers: int = 5,
+                  show_traceback: bool = False,
+                  **kwargs
+                  ) -> Dict[str, pd.DataFrame]:
+        
+        """Download all valid (parameter, resolution, year) combinations in parallel.
+ 
+        Parameters
+        ----------
+        parameters:
+            One or more parameter names or numeric codes.
+        resolutions:
+            One or more resolution strings (e.g. ``"hourly"``, ``"daily"``).
+        years:
+            One or more calendar years.
+        max_workers:
+            Number of parallel download threads (default 5).
+        show_traceback:
+            If ``True``, print full tracebacks for failed downloads instead of
+            a one-line summary.
+ 
+        Returns
+        -------
+        Dict[str, pd.DataFrame]
+            Mapping of ``filename -> DataFrame`` for every successful download.
+            Failed downloads are logged to stdout; call ``_download_result``
+            variant if you need structured access to failures.
+        """
+
+        if not kwargs.get("silent", True):
+            print(f"Starting parallel download with {max_workers} workers...")
+            print(f"Parameters: {parameters}")
+            print(f"Resolutions: {resolutions}")
+            print(f"Years: {years}")
+
+        combos = cls._parameters_validator(parameters, resolutions, years)
+        if not combos:
+            return {}
+ 
+        # max_workers without touching module-level state.
+        executor = ParallelExecutor(
+            max_workers=max_workers,
+            desc="Downloading EPA data",
+            mode="thread",          
+            show_traceback=show_traceback,
+            )
+        
+        download_parallel = executor(cls._download_single)
+ 
+        result: JobResult = download_parallel(combos)
+ 
+        if result.failed:
+            print(
+                f"\n{len(result.failed)} download(s) failed. "
+                "Retry the failed jobs or inspect result.failed for details."
+            )
+            for failure in result.failed:
+                job_label = (
+                    "{resolution}_{parameter}_{year}".format(**failure.job)
+                )
+                print(f"  [FAILED] {job_label}: {failure.exc}")
+ 
+        return result.succeeded
+
 
 # ---------------------------------------- #
 # AirNow API Handler Class
 # ---------------------------------------- #
-
 @dataclass
 class AirNowParams:
     startDate: str = field(default_factory=lambda: (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%dT%H"))
@@ -478,6 +612,9 @@ class AirNow:
         df.to_parquet(filepath, index=False)
         return filepath
 
+    # def download(self, **kwargs) -> Path:
+        
+
 #%%
 if __name__ == "__main__": 
     airnow = AirNow() 
@@ -490,41 +627,5 @@ if __name__ == "__main__":
 
 # %%
 
-def download_temp(parameters, resolutions, years, output_dir=None, save_as_parquet=True, **kwargs):
 
-    session = requests.Session()
-
-    # O(1) lookup from Parameter Code -> Resolutions
-    code_map = {v["code"]: v for v in EPA_PARAMETERS.values()}
-
-    params_combos = []
-    for y in years: 
-        for p in parameters: 
-            for r in resolutions: 
-
-                if not p.isdigit():
-                    p = EPA_PARAMETERS[p.lower()]["code"]
-                
-                res_bool = code_map.get(p, {}).get(r, False)
-                if res_bool:
-                    params_combos.append({
-                        "resolution": r,
-                        "parameter": p,
-                        "year": y,
-                        "session": session,
-                        })
-                else: 
-                    print(f"Parameter: {p} does not have Resolution: {r}")
-    
-    with ThreadPoolExecutor(max_workers=kwargs.get("max_workers", 5)) as executor:
-        futures = [executor.submit(EPA_PREGEN._download_single, **combo) for combo in params_combos]
-        results = {}
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Downloading data"):
-            try:
-                df, filename = future.result()
-                results[filename] = df
-            except Exception as e:
-                print(f"An error occurred: {e}")
-
-    return results
 
