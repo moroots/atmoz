@@ -191,14 +191,41 @@ class epa_pregen:
 
         if not kwargs.get("silent", True):
             print(f"Downloading {parameter} at {resolution} resolution for {year}...")
-
+        
+        dtypes = {
+            "State Code": str,
+            "County Code": str,
+            "Site Num": str,
+            "Parameter Code": str,
+            "POC": str,
+            "Latitude": str, 
+            "Longitude": str, 
+            "Datum": str, 
+            "Parameter Name": str, 
+            "Date Local": str, 
+            "Time Loca": str, 
+            "Date GMT": str, 
+            "Time GMT": str, 
+            "Sample Measurement": float, 
+            "Units of Measure": str, 
+            "MDL": str, 
+            "Uncertainty": float, 
+            "Qualifier": str, 
+            "Method Type": str, 
+            "Method Code": str, 
+            "Method Name": str, 
+            "State Name": str, 
+            "County Name": str, 
+            "Date of Last Change": str,
+            }
+        
         session = session_handler.session() 
         url = f"{cls.base_url_aqs}/{resolution}_{parameter}_{year}.zip"
         filename = f"{resolution}_{parameter}_{year}.csv"
 
         zip_file = utils.download_zip(url, session)
         with zip_file.open(filename) as f:
-            df = pd.read_csv(f, low_memory=False)
+            df = pd.read_csv(f, low_memory=False, dtype=dtypes)
 
         return {"key": filename, "value": df}
 
