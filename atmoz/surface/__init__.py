@@ -1,1 +1,1 @@
-from .AirNow import AirNow, EPA_PREGEN
+from atmoz.surface.AirNow import AirNow

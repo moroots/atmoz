@@ -9,7 +9,9 @@ Description:
 """
 #%% 
 
+#%%
 # Importing Packages
+from __future__ import annotations
 
 from collections import namedtuple
 from urllib.parse import urljoin, urlencode, urlparse, urlunparse
@@ -29,14 +31,14 @@ from dataclasses import dataclass, field, fields, MISSING, asdict
 
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-import io
 
-from __future__ import annotations
+import io
  
 from atmoz.resources.sessionHandler import SessionHandler
 from atmoz.resources.parallelExecutor import ParallelExecutor, JobResult
- 
- 
+
+from atmoz.resources.atmoz_dataclasses import atmoz_dataset
+
 # ---------------------------------------------------------------------------
 # Module-level session handler — one instance, shared across all threads.
 # Each thread transparently gets its own requests.Session via threading.local.
@@ -81,7 +83,7 @@ EPA_PARAMETERS = {
     "conc_by_monitor": {"code": "conc_by_monitor", "hourly": False, "daily": False, "8hour": False, "annual": True},
 }
 
-class __epa_pregen:
+class epa_pregen:
     """
     Simple class to efficiently handle downloading and processing the EPA PreGenerated Files.
 
@@ -105,7 +107,7 @@ class __epa_pregen:
     def _parameters_validator(cls, 
                                parameters: Union[str, List],
                                resolutions: Union[str, List],
-                               years: Union[int, List],
+                               years: Union[str, List],
                                **kwargs
                                ) -> List[Dict[str, Any]]:
 
@@ -116,6 +118,7 @@ class __epa_pregen:
         Returns a list of job dicts ready to be passed directly to the parallel executor,
         with keys: "resolution", "parameter", "year". 
         """
+        
         if not kwargs.get("silent", True):
             print("Validating parameter-resolution-year combinations...")
 
@@ -123,7 +126,7 @@ class __epa_pregen:
             parameters = [parameters]
         if isinstance(resolutions, str):
             resolutions = [resolutions]
-        if isinstance(years, int):
+        if isinstance(years, str):
             years = [years]
         
         seen: set[tuple] = set()
@@ -494,16 +497,16 @@ class AirNow:
         return data
 
     def import_data(self,
-                    date_start: Optional[Union[str, datetime]] = None,
-                    date_end: Optional[Union[str, datetime]] = None,
+                    start_date: Optional[Union[str, datetime]] = None,
+                    end_date: Optional[Union[str, datetime]] = None,
                     **kwargs
                     ) -> Tuple[Dict[str, Dict[Any, pd.DataFrame]], pd.DataFrame]:
         """
         Imports data from the AirNow API within a specified date range and returns the dataset along with its metadata.
 
         Parameters:
-            date_start (str or datetime, optional): The start date for data import. If provided with `date_end`, data will be fetched for each day in the range.
-            date_end (str or datetime, optional): The end date for data import. Used with `date_start` to define the date range.
+            start_date (str or datetime, optional): The start date for data import. If provided with `end_date`, data will be fetched for each day in the range.
+            end_date (str or datetime, optional): The end date for data import. Used with `start_date` to define the date range.
             **kwargs: Additional keyword arguments to be passed to the AirNowParams constructor and the internal data pulling method. 
                 - silent (bool, optional): If True (default), displays a progress bar during data download.
 
@@ -513,14 +516,14 @@ class AirNow:
                 - metadata (pd.DataFrame): Metadata associated with the imported dataset.
 
         Notes:
-            - If both `date_start` and `date_end` are not provided, data is imported for the default parameters specified in `kwargs`.
+            - If both `start_date` and `end_date` are not provided, data is imported for the default parameters specified in `kwargs`.
             - Uses tqdm for progress indication if `silent` is True.
         """
         silent = kwargs.pop("silent", True)
 
         list_of_params_objs: List[AirNowParams] = []
-        if date_start and date_end: 
-            date_range = [t.strftime("%Y-%m-%dT%H") for t in pd.date_range(start=date_start, end=date_end, freq="1d")]
+        if start_date and end_date: 
+            date_range = [t.strftime("%Y-%m-%dT%H") for t in pd.date_range(start=start_date, end=end_date, freq="1d")]
             list_of_params_objs.extend([
                 AirNowParams(
                     startDate=date_range[i-1], 
@@ -543,12 +546,12 @@ class AirNow:
         
         data: pd.DataFrame = pd.concat(list_of_dfs) if len(list_of_dfs) > 1 else list_of_dfs[0]
         metadata: pd.DataFrame = self._metadata(data)
-        dataset: Dict[str, Dict[Any, pd.DataFrame]] = self._nest(data, metadata)
-        return dataset, metadata
+        # dataset: Dict[str, Dict[Any, pd.DataFrame]] = self._nest(data, metadata)
+        return atmoz_dataset(data=data, metadata=metadata, datatype="surface")
 
     def download_data(self,
-                      date_start: Optional[Union[str, datetime]] = None,
-                      date_end: Optional[Union[str, datetime]] = None,
+                      start_date: Optional[Union[str, datetime]] = None,
+                      end_date: Optional[Union[str, datetime]] = None,
                       output_dir: Optional[Path] = None,
                       max_workers: int = 3,
                       **kwargs
@@ -557,25 +560,23 @@ class AirNow:
         Imports data from the AirNow API within a specified date range and saves it to a Parquet file.
 
         Parameters:
-            date_start (str or datetime, optional): The start date for data import. If provided with `date_end`, data will be fetched for each day in the range.
-            date_end (str or datetime, optional): The end date for data import. Used with `date_start` to define the date range.
+            start_date (str or datetime, optional): The start date for data import. If provided with `end_date`, data will be fetched for each day in the range.
+            end_date (str or datetime, optional): The end date for data import. Used with `start_date` to define the date range.
             **kwargs: Additional keyword arguments to be passed to the AirNowParams constructor and the internal data pulling method. 
                 - silent (bool, optional): If True (default), displays a progress bar during data download.
 
         Returns:
-            tuple:
-                - dataset (dict): The processed dataset containing the imported data, nested as required.
-                - metadata (pd.DataFrame): Metadata associated with the imported dataset.
+            dict: A dictionary containing the imported data and metadata.
 
         Notes:
-            - If both `date_start` and `date_end` are not provided, data is imported for the default parameters specified in `kwargs`.
+            - If both `start_date` and `end_date` are not provided, data is imported for the default parameters specified in `kwargs`.
             - Uses tqdm for progress indication if `silent` is True.
         """
         silent = kwargs.pop("silent", True)
 
         list_of_params_objs: List[AirNowParams] = []
-        if date_start and date_end: 
-            date_range = [t.strftime("%Y-%m-%dT%H") for t in pd.date_range(start=date_start, end=date_end, freq="1D")]
+        if start_date and end_date: 
+            date_range = [t.strftime("%Y-%m-%dT%H") for t in pd.date_range(start=start_date, end=end_date, freq="1D")]
             list_of_params_objs.extend([
                 AirNowParams(
                     startDate=date_range[i-1], 
@@ -600,9 +601,9 @@ class AirNow:
                     print(f"An error occurred: {e}")
 
         df = pd.concat(temp, ignore_index=True)
-        full_query = AirNowParams(startDate=date_start, endDate=date_end, **kwargs)
+        full_query = AirNowParams(startDate=start_date, endDate=end_date, **kwargs)
         df.attrs = {"query_params": asdict(full_query)}
-        filename = f"airnow_api_query_{date_start}_{date_end}.parquet"
+        filename = f"airnow_api_query_{start_date}_{end_date}.parquet"
         if output_dir:
             output_dir.mkdir(parents=True, exist_ok=True)
             filepath = output_dir / filename
@@ -612,20 +613,14 @@ class AirNow:
         df.to_parquet(filepath, index=False)
         return filepath
 
-    # def download(self, **kwargs) -> Path:
+    @classmethod
+    def download(cls, endpoint: str = "airnow", **kwargs) -> Path:
+        if endpoint == "airnow":
+            return cls().import_data(**kwargs)
+        elif endpoint == "aqs":
+            return epa_pregen._download(**kwargs)
+        else:
+            raise ValueError(f"Unsupported endpoint: {endpoint}. Valid options are 'airnow' and 'aqs'.")
         
-
-#%%
-if __name__ == "__main__": 
-    airnow = AirNow() 
-    dataset, metadata = airnow.import_data()
-
-    print("Metadata:")
-    print(metadata.head())
-    print("\nDataset keys (pollutants):")
-    print(dataset.keys())
-
-# %%
-
 
 

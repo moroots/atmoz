@@ -312,11 +312,27 @@ def site_map(instruments: Dict,
     
     params = {
         "bbox": {
-            "lon": [-74.3, -71.8],
-            "lat": [40.4, 41.3]
+            "lon": [-125.0, -66.9],
+            "lat": [24.4, 49.4]
             },
+
+        "map": {
+            "zoom": 7,
+            "bearing": 0,
+            "pitch": 20,
+            "domain": dict(x=[0, 1], y=[0, 1]),
+            },
+        "legend": dict(
+            font=dict(size=18),      # text size
+            itemsizing='constant',   # keeps marker size constant in legend
+            itemwidth=40,            # optional, adds spacing between items
+            bgcolor='rgba(255,255,255,0.7)',  # optional: semi-transparent background
+            x=0.01, y=0.99           # position (bottom-left to top-right)
+            )
         }
-     
+    
+    params = useful_functions.merge_dicts(params, kwargs)
+
     fig = go.Figure()
 
     for name in instruments.keys():
@@ -335,19 +351,12 @@ def site_map(instruments: Dict,
         map=dict(
             style="carto-positron",
             center=dict(lat=np.mean(params["bbox"]["lat"]), lon=np.mean(params["bbox"]["lon"])),
-            zoom=7,
-            bearing=0,
-            pitch=20,
-            domain=dict(x=[0, 1], y=[0, 1]),
+            *params["map"]
             ),
+
         margin=dict(l=0, r=0, t=40, b=0),
-        legend=dict(
-            font=dict(size=18),      # text size
-            itemsizing='constant',   # keeps marker size constant in legend
-            itemwidth=40,            # optional, adds spacing between items
-            bgcolor='rgba(255,255,255,0.7)',  # optional: semi-transparent background
-            x=0.01, y=0.99           # position (bottom-left to top-right)
-            )
+        legend=params["legend"],
+        showlegend=True
         )
     
     fig.show()
