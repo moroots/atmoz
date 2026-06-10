@@ -265,7 +265,6 @@ class TOLNET:
         """
         query = TOLNET_DATA_QUERY(**params)
         query_dict = query.model_dump(exclude_none=True)
-        print(query_dict)
 
         session = requests.Session()
         data_frames = []
