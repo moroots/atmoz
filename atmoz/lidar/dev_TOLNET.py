@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 
 # Housekeeping
+import threading
+import warnings
 import yaml
 import requests
 from datetime import datetime
@@ -98,8 +100,9 @@ class TOLNET_DATA_QUERY(BaseModel):
         bbox_fields = [self.minLatitude, self.maxLatitude, self.minLongitude, self.maxLongitude]
         if all(field is not None for field in bbox_fields):
             for f in ["latitude", "longitude", "radius"]:
-                setattr(self, f, None)
-                raise Warning(f"Do not use {f} and bbox at same time. Ignoring {f} in favor of bbox.")
+                if getattr(self, f) is not None:
+                    warnings.warn(f"Do not use {f} and bbox at same time. Ignoring {f} in favor of bbox.")
+                    setattr(self, f, None)
             if not (self.minLatitude < self.maxLatitude):
                 raise ValueError("minLatitude must be less than maxLatitude.")
             if not (self.minLongitude < self.maxLongitude):
@@ -189,10 +192,10 @@ class TOLNET:
             "file_type_name": "str",
             "revision": "int16",
             "near_real_time": "str",
-            "file_size": "int16",
-            "latitude": "int16",
-            "longitude": "int16",
-            "altitude": "int16",
+            "file_size": "int64",
+            "latitude": "float64",
+            "longitude": "float64",
+            "altitude": "float64",
             "isAccessible": "bool",
             }
 
@@ -289,6 +292,63 @@ class TOLNET:
 
         return df.astype(self.file_list_dtypes)
 
+    def search_by_file_name(
+        self,
+        file_name: str,
+        match_type: Literal["exact_match", "begins_with", "ends_with"] = "exact_match",
+        ) -> pd.DataFrame:
+        """
+        Search for files by name via GET /data/search_by_file_name.
+
+        Parameters
+        ----------
+        file_name : str
+            The file name (or partial name) to search for.
+        match_type : str
+            "exact_match" (default), "begins_with", or "ends_with".
+        """
+        response = requests.get(
+            f"{self.base_url}/data/search_by_file_name",
+            params={"file_name": file_name, "match_type": match_type},
+            timeout=10,
+            )
+        response.raise_for_status()
+        data = response.json()
+        if not data:
+            return pd.DataFrame().astype(self.file_list_dtypes)
+        return pd.DataFrame(data).astype(self.file_list_dtypes)
+
+    def calendar(
+        self,
+        instrument_group: Union[str, int],
+        file_type: Union[str, int],
+        product_type: Optional[Union[str, int]] = None,
+        processing_type: Optional[Union[str, int]] = None,
+        ) -> pd.DataFrame:
+        """
+        Return a chronological listing via GET /data/calendar.
+
+        Parameters
+        ----------
+        instrument_group : str or int
+            Instrument group name or ID (required).
+        file_type : str or int
+            File type name or ID (required).
+        product_type : str or int, optional
+        processing_type : str or int, optional
+        """
+        params: dict = {"instrument_group": str(instrument_group), "file_type": str(file_type)}
+        if product_type is not None:
+            params["product_type"] = str(product_type)
+        if processing_type is not None:
+            params["processing_type"] = str(processing_type)
+        response = requests.get(f"{self.base_url}/data/calendar", params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if not data:
+            return pd.DataFrame()
+        return pd.DataFrame(data)
+
     def _add_timezone(self, time):
         return [utc.replace(tzinfo=tz.gettz("UTC")) for utc in time]
 
@@ -302,7 +362,7 @@ class TOLNET:
 
     def _json_to_dict(self, file_id: int) -> dict:
         try:
-            url = f"{self.base_url}/data/json/{file_id}"
+            url = f"{self.base_url}/data/{file_id}/json"
             return requests.get(url).json()
         except Exception:
             self._errors.append(f"Error pulling file id {file_id}")
@@ -314,8 +374,7 @@ class TOLNET:
                 columns=meta_data["altitude"]["data"],
                 index=pd.to_datetime(meta_data["datetime"]["data"]),
                 )
-            df = df.apply(pd.to_numeric)
-            df[df.isnull()] = np.nan
+            df = df.apply(pd.to_numeric, errors="coerce")
             df.sort_index(inplace=True)
         except Exception as e:
             self._errors.append(f"_unpack_data: {e}")
@@ -387,12 +446,15 @@ class TOLNET:
                     self._errors.append(f"Error processing file {file_name}: {e}")
 
         if geos_cf:
+            geos_cf_model = models.geos_cf()
             for key in list(self.data.keys()):
-                models.geos_cf().get_geos_data_multithreaded(
+                geos_cf_model.get_geos_data_multithreaded(
                     key[2],
                     self.request_dates[0],
                     self.request_dates[1],
                     )
+            for geos_key, geos_dates in geos_cf_model.data.items():
+                self.data[geos_key] = geos_dates
 
         return self
 
@@ -404,14 +466,31 @@ class TOLNET:
         print(f"Failed to download file {file_id}. Status code: {response.status_code}")
         return file_id, None
 
-    def download(self, **params) -> dict:
-        """Stub — returns file list for the query; download logic TBD."""
-        json_format = params.pop("json", True)
-        URL_PATH = r"/data/json" if json_format else r"/data/download"
+    def download(self, dest_dir: str, file_type: str = "json", threaded: bool = True, max_workers: int = 8, **params):
+        """
+        Query the file list and download matching files to dest_dir.
+
+        Parameters
+        ----------
+        dest_dir : str
+            Directory to save downloaded files.
+        file_type : str
+            "json" (default) or "hdf".
+        threaded : bool
+            Use parallel download (default True).
+        max_workers : int
+            Thread count for parallel download (default 8).
+        **params
+            Any TOLNET_DATA_QUERY fields to filter the file list.
+        """
         files_list = self._get_files_list(**params)
         if files_list.empty:
             print("No files found for the given query parameters.")
-            return {}
+            return []
+        if threaded:
+            return self.download_files_threaded(files_list, dest_dir, file_type=file_type, max_workers=max_workers)
+        else:
+            return self.download_files(files_list, dest_dir, file_type=file_type)
 
     def download_files(self, files_list: pd.DataFrame, dest_dir: str, file_type: str = "json"):
         """Sequential authenticated download of TOLNet files to disk."""
@@ -421,7 +500,7 @@ class TOLNET:
 
         for idx, file_id in enumerate(files_list.id, start=1):
             if file_type == "json":
-                url = f"{self.base_url}/data/json/{file_id}"
+                url = f"{self.base_url}/data/{file_id}/json"
                 ext = "json"
             elif file_type == "hdf":
                 url = f"{self.base_url}/data/download/{file_id}"
@@ -449,18 +528,17 @@ class TOLNET:
         """Parallel authenticated download of TOLNet files to disk."""
         dest_dir = Path(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            session = EarthData().auth.get_session()
-        except Exception as e:
-            print(
-                f"Failed to initialize EarthData: {e}\n"
-                "Perhaps call EarthData() separately to debug authentication issues."
-                )
-            return []
+
+        _local = threading.local()
+
+        def _get_session():
+            if not hasattr(_local, "session"):
+                _local.session = EarthData().auth.get_session()
+            return _local.session
 
         def download_one(file_id):
             if file_type == "json":
-                url = f"{self.base_url}/data/json/{file_id}"
+                url = f"{self.base_url}/data/{file_id}/json"
                 ext = "json"
             elif file_type == "hdf":
                 url = f"{self.base_url}/data/download/{file_id}"
@@ -469,7 +547,7 @@ class TOLNET:
                 raise ValueError("file_type must be 'json' or 'hdf'")
             dest_path = dest_dir / f"{file_id}.{ext}"
             try:
-                r = session.get(url, timeout=30)
+                r = _get_session().get(url, timeout=30)
                 r.raise_for_status()
                 dest_path.write_bytes(r.content)
             except requests.RequestException as e:
