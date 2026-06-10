@@ -361,7 +361,7 @@ class TOLNET:
 
     def _json_to_dict(self, file_id: int) -> dict:
         try:
-            url = f"{self.base_url}/data/{file_id}/json"
+            url = f"{self.base_url}/data/json/{file_id}"
             return requests.get(url).json()
         except Exception:
             self._errors.append(f"Error pulling file id {file_id}")
@@ -499,7 +499,7 @@ class TOLNET:
 
         for idx, file_id in enumerate(files_list.id, start=1):
             if file_type == "json":
-                url = f"{self.base_url}/data/{file_id}/json"
+                url = f"{self.base_url}/data/json/{file_id}"
                 ext = "json"
             elif file_type == "hdf":
                 url = f"{self.base_url}/data/download/{file_id}"
@@ -537,7 +537,7 @@ class TOLNET:
 
         def download_one(file_id):
             if file_type == "json":
-                url = f"{self.base_url}/data/{file_id}/json"
+                url = f"{self.base_url}/data/json/{file_id}"
                 ext = "json"
             elif file_type == "hdf":
                 url = f"{self.base_url}/data/download/{file_id}"
