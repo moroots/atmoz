@@ -581,7 +581,8 @@ class TOLNET:
               time_resolution : "auto" | pandas offset string (e.g. "30min")
               use_contourf : bool (default False, uses pcolormesh)
         """
-        params = useful_functions.merge_dicts(self.plot_params, kwargs)
+        import copy
+        params = copy.deepcopy(useful_functions.merge_dicts(self.plot_params, kwargs))
         xlims = params.pop("xlims", "auto")
         time_resolution = params.pop("time_resolution", "auto")
 
@@ -628,6 +629,8 @@ class TOLNET:
 
             if im is not None:
                 params["fig.colorbar"]["mappable"] = im
+            else:
+                params.pop("fig.colorbar", None)
 
             plot_utilities.apply_datetime_axis(ax)
 
