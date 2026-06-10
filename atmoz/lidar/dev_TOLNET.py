@@ -51,7 +51,7 @@ class TOLNET_DATA_QUERY(BaseModel):
     file_type: Optional[Union[str, int, List[Union[str, int]]]] = Field(alias="file_type_name", default=None)
 
     # Boolean Fields
-    near_real_time: Optional[Literal["true", "false"]] = Field(alias="near_real_time", default="true")
+    near_real_time: Optional[Literal["true", "false"]] = Field(alias="near_real_time", default=None)
 
     # Date Fields
     min_date: Optional[str] = Field(alias="min_date", default=None)
@@ -135,7 +135,7 @@ class TOLNET_DATA_QUERY(BaseModel):
             return ",".join(str(x) for x in v)
         if isinstance(v, (int, str)):
             return str(v)
-        raise TypeError("Expected int, str, or list of int/str")
+        raise TypeError("Expected int, str, or List[int, str]")
 
     @field_validator("near_real_time", mode="before")
     @classmethod
@@ -262,6 +262,7 @@ class TOLNET:
         """
         query = TOLNET_DATA_QUERY(**params)
         query_dict = query.model_dump(exclude_none=True)
+        print(query_dict)
 
         session = requests.Session()
         data_frames = []
