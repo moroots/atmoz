@@ -4,8 +4,11 @@ Created on 2026-06-10
 
 @author: Maurice Roots
 
-A Module for Working with NASA GEOS-CF Data via the CFAPI.
+A Module for Working with NASA GEOS-CF Data via OPeNDAP.
 Single-site point queries returning xarray Datasets.
+
+Data access: https://opendap.nccs.nasa.gov/dods/gmao/geos-cf/
+Units: gas species are in mol/mol — multiply by 1e9 to convert to ppb.
 """
 
 #%%
@@ -16,36 +19,49 @@ import pandas as pd
 import xarray as xr
 
 # Housekeeping
-import requests
 from datetime import datetime
 from typing import Dict, List, Literal, Optional
 
 # Validation
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 
-# Multi-Threading
+# Progress
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # --------------------------------------------------------------------------------------------------------------------------------- #
-# Collection Catalog
+# OPeNDAP Collection Catalog
 # --------------------------------------------------------------------------------------------------------------------------------- #
+_OPENDAP_BASE = "https://opendap.nccs.nasa.gov/dods/gmao/geos-cf"
+
 _COLLECTION_CATALOG: Dict[str, dict] = {
     "aqc": {
-        "variables": ["O3", "NO2", "CO", "SO2", "PM25_RH35_GCC"],
+        "urls": {
+            "assim": f"{_OPENDAP_BASE}/assim/aqc_tavg_1hr_g1440x721_v1",
+            "fcast": f"{_OPENDAP_BASE}/fcast/aqc_tavg_1hr_g1440x721_v1",
+        },
+        "variables": ["o3", "no2", "co", "so2", "pm25_rh35_gcc"],
         "level_type": None,
-        "description": "Surface air quality (O3, NO2, CO, SO2, PM2.5)",
+        "units": "mol/mol (gas), µg/m³ (pm25)",
+        "description": "Surface air quality — 1-hr average (2018–2026)",
     },
     "chm": {
-        "variables": ["O3", "NO2", "CO", "SO2", "OH", "HNO3", "CH2O", "PAN"],
-        "level_type": "v72",
-        "description": "Chemistry vertical profiles, 72 model levels",
+        "urls": {
+            "assim": f"{_OPENDAP_BASE}/assim/chm_tavg_1hr_g1440x721_v1",
+        },
+        "variables": ["o3", "no2", "co", "so2", "oh", "hno3"],
+        "level_type": "lev",
+        "units": "mol/mol",
+        "description": "Chemistry profiles — 1-hr average, 72 model levels (2018–2026)",
     },
     "met": {
-        "variables": ["T", "U", "V", "Q", "ZL", "ZPBL", "PS"],
-        "level_type": "v72",
-        "description": "Meteorology vertical profiles, 72 model levels",
+        "urls": {
+            "assim": f"{_OPENDAP_BASE}/assim/met_tavg_1hr_g1440x721_x1",
+        },
+        "variables": ["t2m", "u10m", "v10m", "q2m", "zpbl", "ps"],
+        "level_type": None,
+        "units": "SI (K, m/s, kg/kg, Pa)",
+        "description": "Meteorology surface — 1-hr average (2018–2026)",
     },
 }
 
@@ -63,25 +79,18 @@ class GEOS_CF_QUERY(BaseModel):
     collection: Literal["aqc", "chm", "met"] = Field(default="aqc")
     mode: Literal["assim", "fcast"] = Field(default="assim")
     variables: Optional[List[str]] = Field(default=None)
-    level_type: Optional[Literal["v72", "v36", "p23", "x1"]] = Field(default=None)
 
     @field_validator("start_date", "end_date", mode="before")
     @classmethod
     def _normalize_date(cls, v: str) -> str:
-        """Accept YYYY-MM-DD or YYYYMMDD; store as YYYYMMDD."""
+        """Accept YYYY-MM-DD or YYYYMMDD; store as YYYY-MM-DD for xarray slicing."""
         v = str(v).strip()
         if len(v) == 10 and "-" in v:
-            try:
-                datetime.strptime(v, "%Y-%m-%d")
-                return v.replace("-", "")
-            except ValueError:
-                pass
+            datetime.strptime(v, "%Y-%m-%d")
+            return v
         elif len(v) == 8:
-            try:
-                datetime.strptime(v, "%Y%m%d")
-                return v
-            except ValueError:
-                pass
+            dt = datetime.strptime(v, "%Y%m%d")
+            return dt.strftime("%Y-%m-%d")
         raise ValueError(f"'{v}' must be YYYY-MM-DD or YYYYMMDD.")
 
     @model_validator(mode="after")
@@ -92,11 +101,8 @@ class GEOS_CF_QUERY(BaseModel):
 
     @model_validator(mode="after")
     def _fill_collection_defaults(self):
-        defaults = _COLLECTION_CATALOG.get(self.collection, {})
-        if self.level_type is None:
-            self.level_type = defaults.get("level_type")
         if self.variables is None:
-            self.variables = list(defaults.get("variables", []))
+            self.variables = list(_COLLECTION_CATALOG.get(self.collection, {}).get("variables", []))
         return self
 
 
@@ -105,93 +111,29 @@ class GEOS_CF_QUERY(BaseModel):
 # --------------------------------------------------------------------------------------------------------------------------------- #
 class GEOS_CF:
     """
-    Single-site client for the NASA GEOS-CF CFAPI.
+    Single-site client for NASA GEOS-CF via OPeNDAP.
 
     Fetches AQC (surface), CHM (chemistry profiles), and MET (met profiles)
-    for a single lat/lon point and stores results as xr.Dataset objects.
+    at a single lat/lon point using server-side subsetting and stores results
+    as xr.Dataset objects.
 
     Data keys: (lat_lon_str, mode, collection)
-      e.g. ("39.24x-76.363", "assim", "aqc")
+      e.g. ("39.0x-77.0", "assim", "aqc")
+
+    Units: gas species are in mol/mol from OPeNDAP.
+      → multiply by 1e9 to convert to ppb
+      → multiply by 1e6 to convert to ppm
     """
 
     def __init__(self):
-        self.base_url = r"https://fluid.nccs.nasa.gov/cfapi"
         self.data: Dict[tuple, xr.Dataset] = {}
         self._errors: List[str] = []
         return
 
     @property
     def catalog(self) -> dict:
-        """Available collections with their default variables and level types."""
+        """Available collections, variables, and OPeNDAP URLs."""
         return _COLLECTION_CATALOG
-
-    # ---------------------------------------------------------------- #
-    # Internal: URL and fetch
-    # ---------------------------------------------------------------- #
-    def _url(
-        self,
-        mode: str,
-        collection: str,
-        level_type: Optional[str],
-        variable: str,
-        lat_lon: str,
-        start: str,
-        end: str,
-    ) -> str:
-        # Surface collections: {base}/{collection}/{mode}/{variable}/{lat_lon}/{start}/{end}
-        # Profile collections: {base}/{mode}/{collection}/{level_type}/{variable}/{lat_lon}/{start}/{end}
-        if level_type:
-            return f"{self.base_url}/{mode}/{collection}/{level_type}/{variable}/{lat_lon}/{start}/{end}"
-        return f"{self.base_url}/{collection}/{mode}/{variable}/{lat_lon}/{start}/{end}"
-
-    def _fetch_single(
-        self,
-        mode: str,
-        collection: str,
-        level_type: Optional[str],
-        variable: str,
-        lat_lon: str,
-        start: str,
-        end: str,
-        session: requests.Session,
-    ) -> dict:
-        url = self._url(mode, collection, level_type, variable, lat_lon, start, end)
-        response = session.get(url, timeout=30)
-        response.raise_for_status()
-        return response.json()
-
-    def _to_dataarray(
-        self,
-        response_json: dict,
-        variable: str,
-        has_levels: bool,
-    ) -> xr.DataArray:
-        times = pd.to_datetime(
-            response_json["time"], utc=True, format="%Y-%m-%dT%H:%M:%S"
-        )
-        values_dict = response_json["values"]
-
-        # Case-insensitive key lookup
-        var_key = next((k for k in values_dict if k.upper() == variable.upper()), None)
-        if var_key is None:
-            raise KeyError(f"'{variable}' not in response. Got: {list(values_dict.keys())}")
-
-        arr = np.array(values_dict[var_key], dtype=float)
-
-        if has_levels and arr.ndim == 2:
-            return xr.DataArray(
-                arr,
-                dims=["time", "level"],
-                coords={"time": times, "level": np.arange(arr.shape[1])},
-                name=variable,
-            )
-
-        return xr.DataArray(
-            arr.ravel(),
-            dims=["time"],
-            coords={"time": times},
-            name=variable,
-        )
 
     # ---------------------------------------------------------------- #
     # Public: Fetch
@@ -205,11 +147,9 @@ class GEOS_CF:
         collection: str = "aqc",
         mode: str = "assim",
         variables: Optional[List[str]] = None,
-        level_type: Optional[str] = None,
-        max_workers: int = 4,
     ) -> "GEOS_CF":
         """
-        Fetch GEOS-CF data for a single site.
+        Fetch GEOS-CF data for a single site via OPeNDAP.
 
         Parameters
         ----------
@@ -220,70 +160,79 @@ class GEOS_CF:
         collection : 'aqc' | 'chm' | 'met'
             Data product. Defaults to 'aqc' (surface air quality).
         mode : 'assim' | 'fcast'
-            'assim' for replay/historical; 'fcast' for 5-day forecast.
+            'assim' for replay/historical; 'fcast' for forecast.
         variables : list of str, optional
-            Variables to fetch. Uses collection defaults if None.
-        level_type : 'v72' | 'v36' | 'p23' | 'x1', optional
-            Vertical level scheme. Inferred from collection if None.
-        max_workers : int
-            Parallel threads (one per variable).
+            Variables to fetch (lowercase). Uses collection defaults if None.
 
         Returns
         -------
         self — result stored in self.data[(lat_lon, mode, collection)]
+
+        Notes
+        -----
+        Gas-phase species (o3, no2, co, so2) are returned in mol/mol.
+        Multiply by 1e9 to convert to ppb.
         """
         query = GEOS_CF_QUERY(
             lat=lat, lon=lon,
             start_date=start_date, end_date=end_date,
             collection=collection, mode=mode,
-            variables=variables, level_type=level_type,
+            variables=variables,
         )
 
-        lat_lon = f"{query.lat}x{query.lon}"
-        has_levels = query.level_type is not None
-        session = requests.Session()
-        data_arrays: Dict[str, xr.DataArray] = {}
-
-        def _fetch_one(variable: str):
-            response_json = self._fetch_single(
-                query.mode, query.collection, query.level_type,
-                variable, lat_lon,
-                query.start_date, query.end_date,
-                session,
+        catalog_entry = _COLLECTION_CATALOG.get(query.collection, {})
+        url = catalog_entry.get("urls", {}).get(query.mode)
+        if url is None:
+            raise ValueError(
+                f"Mode '{query.mode}' is not available for collection '{query.collection}'."
+                f" Available modes: {list(catalog_entry.get('urls', {}).keys())}"
             )
-            return variable, self._to_dataarray(response_json, variable, has_levels)
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_fetch_one, var): var for var in query.variables}
-            for future in tqdm(
-                as_completed(futures),
-                total=len(futures),
-                desc=f"GEOS-CF {query.collection}/{query.mode}",
-                ncols=100,
-            ):
-                var = futures[future]
-                try:
-                    var_name, da = future.result()
-                    data_arrays[var_name] = da
-                except Exception as e:
-                    self._errors.append(f"Failed {var}: {e}")
+        vars_lower = [v.lower() for v in query.variables]
 
-        ds = xr.Dataset(data_arrays)
-        ds.attrs.update({
-            "lat": query.lat,
-            "lon": query.lon,
-            "lat_lon": lat_lon,
+        try:
+            ds = xr.open_dataset(url, engine="netcdf4")
+
+            # Server-side point selection (nearest grid cell)
+            ds_site = ds.sel(lat=query.lat, lon=query.lon, method="nearest")
+
+            # Time slice
+            ds_site = ds_site.sel(time=slice(query.start_date, query.end_date))
+
+            # Variable selection
+            available = [v for v in vars_lower if v in ds_site.data_vars]
+            missing = set(vars_lower) - set(available)
+            if missing:
+                print(f"Warning: {missing} not found in {collection}. Available: {list(ds_site.data_vars)}")
+            if not available:
+                raise KeyError(f"None of {vars_lower} found in dataset.")
+
+            # Load into memory with progress indication
+            print(f"Loading {collection}/{mode} from OPeNDAP ({len(available)} variable(s))...")
+            ds_loaded = ds_site[available].load()
+
+        except Exception as e:
+            self._errors.append(f"fetch({collection}/{mode}): {e}")
+            raise
+
+        lat_lon = f"{query.lat}x{query.lon}"
+        ds_loaded.attrs.update({
+            "lat_requested": query.lat,
+            "lon_requested": query.lon,
+            "lat_actual": float(ds_loaded["lat"].values) if "lat" in ds_loaded.coords else query.lat,
+            "lon_actual": float(ds_loaded["lon"].values) if "lon" in ds_loaded.coords else query.lon,
             "collection": query.collection,
             "mode": query.mode,
-            "start_date": start_date,
-            "end_date": end_date,
+            "start_date": query.start_date,
+            "end_date": query.end_date,
+            "units_note": catalog_entry.get("units", "see GEOS-CF documentation"),
         })
 
-        self.data[(lat_lon, query.mode, query.collection)] = ds
+        self.data[(lat_lon, query.mode, query.collection)] = ds_loaded
         return self
 
     # ---------------------------------------------------------------- #
-    # Public: Altitude Coordinates
+    # Public: Altitude Coordinates (for CHM profiles)
     # ---------------------------------------------------------------- #
     def add_altitude_coords(
         self,
@@ -292,16 +241,14 @@ class GEOS_CF:
     ) -> "GEOS_CF":
         """
         Attach ZL (layer heights, km) from a MET dataset as an altitude
-        coordinate on a profile dataset (CHM or MET).
+        coordinate on a CHM profile dataset.
 
         Parameters
         ----------
         key : tuple
-            Key of the profile dataset to update, e.g.
-            ("39.24x-76.363", "assim", "chm").
+            Key of the CHM dataset to update.
         met_key : tuple, optional
-            Key of the MET dataset containing ZL. Inferred from key if None
-            (same lat_lon and mode, collection="met").
+            Key of the MET dataset containing ZL. Inferred from key if None.
         """
         ds = self.data.get(key)
         if ds is None:
@@ -312,35 +259,28 @@ class GEOS_CF:
             met_key = (lat_lon, mode, "met")
 
         met_ds = self.data.get(met_key)
-        if met_ds is None or "ZL" not in met_ds:
-            print(f"No MET/ZL data at {met_key}. Fetch met collection first.")
+        if met_ds is None or "zl" not in met_ds:
+            print(f"No MET/ZL data at {met_key}. Fetch met collection with 'zl' first.")
             return self
 
-        # ZL shape: (time, level) — assign as a non-dimension coordinate
-        self.data[key] = ds.assign_coords(altitude=met_ds["ZL"])
+        self.data[key] = ds.assign_coords(altitude=met_ds["zl"])
         return self
 
 
 if __name__ == "__main__":
     geos = GEOS_CF()
 
-    lat, lon = 39.24, -76.363
+    lat, lon = 39.05, -76.87
     start, end = "2025-07-28", "2025-08-01"
 
-    # Surface AQC
+    # Surface AQC — O3 only
     geos.fetch(lat=lat, lon=lon, start_date=start, end_date=end,
-               collection="aqc", mode="assim")
+               collection="aqc", mode="assim", variables=["o3"])
 
-    # CHM profiles
-    geos.fetch(lat=lat, lon=lon, start_date=start, end_date=end,
-               collection="chm", mode="assim", variables=["O3", "NO2"])
+    key = next(iter(geos.data))
+    ds = geos.data[key]
+    print(ds)
 
-    # MET (for altitude coords)
-    geos.fetch(lat=lat, lon=lon, start_date=start, end_date=end,
-               collection="met", mode="assim", variables=["ZL", "T"])
-
-    # Attach altitude to CHM
-    geos.add_altitude_coords(key=(f"{lat}x{lon}", "assim", "chm"))
-
-    print(geos.data[(f"{lat}x{lon}", "assim", "aqc")])
-    print(geos.data[(f"{lat}x{lon}", "assim", "chm")])
+    # Convert mol/mol -> ppb
+    o3_ppb = ds["o3"] * 1e9
+    print(f"O3 range: {float(o3_ppb.min()):.1f} – {float(o3_ppb.max()):.1f} ppb")

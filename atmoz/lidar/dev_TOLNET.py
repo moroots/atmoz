@@ -599,6 +599,11 @@ class TOLNET:
         xlims = params.pop("xlims", "auto")
         time_resolution = params.pop("time_resolution", "auto")
 
+        if "title" in params:
+            if "ax.set_title" not in params:
+                params["ax.set_title"] = {}
+            params["ax.set_title"]["label"] = str(params.pop("title"))
+
         cmap, norm = colorbars.tolnet_ozone()
 
         with plt.rc_context(self.plot_theme):
@@ -627,8 +632,9 @@ class TOLNET:
                     continue
 
                 if time_resolution == "auto":
-                    resolution = np.min([df.index[i] - df.index[i - 1] for i in range(1, len(df))])
-                    df = df.resample(f"{resolution.seconds}s").mean()
+                    if len(df) > 1:
+                        resolution = np.min([df.index[i] - df.index[i - 1] for i in range(1, len(df))])
+                        df = df.resample(f"{resolution.seconds}s").mean()
                 else:
                     df = df.resample(f"{time_resolution}").mean()
 
@@ -646,14 +652,13 @@ class TOLNET:
                 params.pop("fig.colorbar", None)
 
             plot_utilities.apply_datetime_axis(ax)
+            plot_utilities.apply_plot_params(fig, ax, **params)
 
             if self.watermark:
                 plot_utilities.apply_watermark(fig, self.watermark)
 
             if self.nrt is True:
                 plot_utilities.apply_near_real_time(ax)
-
-            plot_utilities.apply_plot_params(fig, ax, **params)
 
             plt.show()
         return
