@@ -455,6 +455,19 @@ class TOLNET:
             for geos_key, geos_dates in geos_cf_model.data.items():
                 self.data[geos_key] = geos_dates
 
+        if self._errors:
+            warnings.warn(
+                f"{len(self._errors)} file(s) failed to process. "
+                "Check self._errors for details.",
+                stacklevel=2,
+            )
+        if not self.data and not self.files.empty:
+            warnings.warn(
+                "import_data completed but self.data is empty — "
+                "all files may have failed. Check self._errors.",
+                stacklevel=2,
+            )
+
         return self
 
     def _download(self, file_id: Union[int, str], url_path: str):
