@@ -33,6 +33,7 @@ dependencies = [
     "netcdf4>=1.7.2",
     "pint>=0.21.1",
     "nbformat>=4.2.0",
+    "xarray>=2023.1.0",
 ]
 
 [project.scripts]
