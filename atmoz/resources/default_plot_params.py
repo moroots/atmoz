@@ -65,9 +65,9 @@ tolnet_plot_params = {
         "linewidth": 0.5
         },
 
-    "ax.set_ylims": [0, 15],
+    "ax.set_ylim": [0, 15],
 
-    "fig.layout": "tight",
+    "fig.tight_layout": {},
 
     "fig.colorbar": {
         "pad": 0.01, 

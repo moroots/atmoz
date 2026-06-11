@@ -95,6 +95,7 @@ atmoz/.ipynb_checkpoints/
 # Ignore config directory and any files within it
 config/
 config/**
+uv.lock 
 
 # ===================================
 # IDE / EDITORS
@@ -198,3 +199,6 @@ coverage/
 # Misc large data
 *.h5part
 *.ncx
+
+# GEOS-CF local OPeNDAP cache
+.geos_cf_cache/
