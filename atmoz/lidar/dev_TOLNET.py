@@ -360,24 +360,19 @@ class TOLNET:
         return self
 
     def _json_to_dict(self, file_id: int) -> dict:
-        try:
-            url = f"{self.base_url}/data/json/{file_id}"
-            return requests.get(url).json()
-        except Exception:
-            self._errors.append(f"Error pulling file id {file_id}")
+        url = f"{self.base_url}/data/json/{file_id}"
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.json()
 
     def _unpack_data(self, meta_data: dict) -> pd.DataFrame:
-        try:
-            df = pd.DataFrame(
-                meta_data["value"]["data"],
-                columns=meta_data["altitude"]["data"],
-                index=pd.to_datetime(meta_data["datetime"]["data"]),
-                )
-            df = df.apply(pd.to_numeric, errors="coerce")
-            df.sort_index(inplace=True)
-        except Exception as e:
-            self._errors.append(f"_unpack_data: {e}")
-            return
+        df = pd.DataFrame(
+            meta_data["value"]["data"],
+            columns=meta_data["altitude"]["data"],
+            index=pd.to_datetime(meta_data["datetime"]["data"]),
+            )
+        df = df.apply(pd.to_numeric, errors="coerce")
+        df.sort_index(inplace=True)
         return df
 
     def import_data(self, min_date: str, max_date: str, **kwargs):
@@ -404,7 +399,9 @@ class TOLNET:
 
         self.files = self._get_files_list(min_date=min_date, max_date=max_date, **kwargs)
         self.request_dates = (min_date, max_date)
+        self.data = {}
         self.meta_data = {}
+        self._errors = []
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             future_to_file = {
@@ -662,6 +659,15 @@ class TOLNET:
 
             plt.show()
         return
+
+    def tolnet_curtains(self, **kwargs):
+        """Plot one curtain per (instrument_group, processing_type, lat_lon) key."""
+        for key, item in self.data.items():
+            kw = dict(kwargs)
+            if "title" not in kw:
+                kw["title"] = str(key)
+            self.plot_curtain(item, **kw)
+        return self
 
 
 if __name__ == "__main__":
