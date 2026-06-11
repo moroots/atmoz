@@ -36,6 +36,7 @@ components = namedtuple(
 
 class TOLNET_DATA_QUERY(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
+    
     # Fields that accept str, int, or list
     instrument_group: Optional[Union[str, int, List[Union[str, int]]]] = Field(alias="instrument_group_name", default=None)
     product_type: Optional[Union[str, int, List[Union[str, int]]]] = Field(alias="product_type_name", default=None)

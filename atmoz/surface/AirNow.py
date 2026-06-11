@@ -7,8 +7,11 @@ Created on 2025-10-02 09:24:37
 Description:
      - Pulling Data from the AirNow API
 """
+#%% 
 
+#%%
 # Importing Packages
+from __future__ import annotations
 
 from collections import namedtuple
 from urllib.parse import urljoin, urlencode, urlparse, urlunparse
@@ -22,13 +25,286 @@ import numpy as np
 from tqdm import tqdm
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from atmoz.resources.useful_functions import merge_dicts
+from atmoz.resources import useful_functions as utils
 
 from dataclasses import dataclass, field, fields, MISSING, asdict
 
 from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
+import io
+ 
+from atmoz.resources.sessionHandler import SessionHandler
+from atmoz.resources.parallelExecutor import ParallelExecutor, JobResult
+
+from atmoz.resources.atmoz_dataclasses import atmoz_dataset
+
+# ---------------------------------------------------------------------------
+# Module-level session handler — one instance, shared across all threads.
+# Each thread transparently gets its own requests.Session via threading.local.
+# ---------------------------------------------------------------------------
+_session_handler = SessionHandler(
+    pool_connections=10,
+    pool_maxsize=10,
+    max_retries=3,
+    backoff_factor=0.5,
+    timeout=(5.0, 60.0),
+    )
+
+# ---------------------------------------------------------------------------
+# Endpoints and parameter mappings for EPA PreGenerated (AQS) and AirNow API.
+# ---------------------------------------------------------------------------
+_BASE_URL_AQS     = "https://aqs.epa.gov/aqsweb/airdata/"
+_BASE_URL_AIRNOW  = "https://www.airnowapi.org/aq/data/"
+
+
+EPA_PARAMETERS = {
+    "ozone":           {"code": "44201",           "hourly": True,  "daily": True,  "8hour": True,  "annual": False},
+    "so2":             {"code": "42401",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "co":              {"code": "42101",           "hourly": True,  "daily": True,  "8hour": True,  "annual": False},
+    "no2":             {"code": "42602",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pm25":            {"code": "88101",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pm25_frm":        {"code": "88101",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pm25_nonfrm":     {"code": "88502",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pm10":            {"code": "81102",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pmc":             {"code": "86101",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pm25_spec":       {"code": "SPEC",            "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pm10_spec":       {"code": "PM10SPEC",        "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "wind":            {"code": "WIND",            "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "temp":            {"code": "TEMP",            "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "pressure":        {"code": "PRESS",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "rh_dp":           {"code": "RH_DP",           "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "haps":            {"code": "HAPS",            "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "vocs":            {"code": "VOCS",            "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "nonoxnoy":        {"code": "NONOxNOy",        "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "lead":            {"code": "LEAD",            "hourly": True,  "daily": True,  "8hour": False, "annual": False},
+    "aqi_by_cbsa":     {"code": "aqi_by_cbsa",     "hourly": False, "daily": True,  "8hour": False, "annual": True},
+    "aqi_by_county":   {"code": "aqi_by_county",   "hourly": False, "daily": True,  "8hour": False, "annual": True},
+    "conc_by_monitor": {"code": "conc_by_monitor", "hourly": False, "daily": False, "8hour": False, "annual": True},
+}
+
+class epa_pregen:
+    """
+    Simple class to efficiently handle downloading and processing the EPA PreGenerated Files.
+
+    Downloads are executed in parallel using 'atmoz.resources.parallelExecutor' (mode ="threads"). 
+    HTTP sessions are manaded by 'atmoz.resources.sessionHandler' to ensure thread safety and efficient connection pooling.
+    """
+
+    parameters = EPA_PARAMETERS
+    base_url_aqs = _BASE_URL_AQS
+           
+    # O(1) lookup from Parameter Code -> Resolutions
+    param_code_map = {
+        v["code"]: v for v in EPA_PARAMETERS.values()
+        }
+    
+    def __init__(self) -> None:
+        pass
+
+    # - Validation of Parameter <-> Reslution Combos - #
+    @classmethod
+    def _parameters_validator(cls, 
+                               parameters: Union[str, List],
+                               resolutions: Union[str, List],
+                               years: Union[str, List],
+                               **kwargs
+                               ) -> List[Dict[str, Any]]:
+
+        """
+        Validation of Parameter <-> Resolution Combos for EPA PreGenerated Files.
+        Depends on 'EPA_PARAMETERS' as a quikc lookup for valid combinations.
+
+        Returns a list of job dicts ready to be passed directly to the parallel executor,
+        with keys: "resolution", "parameter", "year". 
+        """
+        
+        if not kwargs.get("silent", True):
+            print("Validating parameter-resolution-year combinations...")
+
+        if isinstance(parameters, str):
+            parameters = [parameters]
+        if isinstance(resolutions, str):
+            resolutions = [resolutions]
+        if isinstance(years, str):
+            years = [years]
+        
+        seen: set[tuple] = set()
+        combos: List[Dict[str, Any]] = []
+
+        for y in years: 
+            for p in parameters: 
+                for r in resolutions: 
+
+                    if not p.isdigit():
+                        p = cls.parameters[p.lower()]["code"]
+                    
+                    # No Duplicates
+                    key = (r, p, y)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+
+                    if cls.param_code_map.get(p, {}).get(r, False):
+                        combos.append({
+                            "resolution": r,
+                            "parameter": p,
+                            "year": y
+                            })
+                    else:
+                        if not kwargs.get("silent", True): 
+                            print(f"Parameter: {p} does not have Resolution: {r}")
+        
+        if not kwargs.get("silent", True):
+            print(f"Validation complete. {len(combos)} valid combinations found.")
+            for combo in combos:
+                print(f"  [VALID] {combo['parameter']} at {combo['resolution']} resolution for {combo['year']}")
+
+        return combos
+
+    # ------------------------------------------------------------------
+    # Single-file download  (plain classmethod — called by the executor)
+    # ------------------------------------------------------------------
+    @classmethod
+    def _download_single(cls, 
+                         resolution: str,
+                         parameter: str, 
+                         year: int, 
+                         session_handler = _session_handler,
+                         **kwargs
+                         ) -> pd.DataFrame:
+        
+        """Download one ZIP file and return a ``JobReturn`` dict.
+ 
+        The HTTP session is obtained from the module-level ``SessionHandler``.
+        Each worker thread automatically receives its own ``requests.Session``
+        via ``threading.local``; no session is passed through the job dict
+        (sessions are not serialisable and must not cross thread boundaries
+        as shared objects).
+ 
+        Returns
+        -------
+        dict
+            ``{"key": filename, "value": DataFrame}`` — the ``JobReturn``
+            contract expected by ``ParallelExecutor``.
+        """
+
+        if not kwargs.get("silent", True):
+            print(f"Downloading {parameter} at {resolution} resolution for {year}...")
+        
+        dtypes = {
+            "State Code": str,
+            "County Code": str,
+            "Site Num": str,
+            "Parameter Code": str,
+            "POC": str,
+            "Latitude": str, 
+            "Longitude": str, 
+            "Datum": str, 
+            "Parameter Name": str, 
+            "Date Local": str, 
+            "Time Loca": str, 
+            "Date GMT": str, 
+            "Time GMT": str, 
+            "Sample Measurement": float, 
+            "Units of Measure": str, 
+            "MDL": str, 
+            "Uncertainty": float, 
+            "Qualifier": str, 
+            "Method Type": str, 
+            "Method Code": str, 
+            "Method Name": str, 
+            "State Name": str, 
+            "County Name": str, 
+            "Date of Last Change": str,
+            }
+        
+        session = session_handler.session() 
+        url = f"{cls.base_url_aqs}/{resolution}_{parameter}_{year}.zip"
+        filename = f"{resolution}_{parameter}_{year}.csv"
+
+        zip_file = utils.download_zip(url, session)
+        with zip_file.open(filename) as f:
+            df = pd.read_csv(f, low_memory=False, dtype=dtypes)
+
+        return {"key": filename, "value": df}
+
+    # ------------------------------------------------------------------
+    # Parallel Downloader
+    # ------------------------------------------------------------------
+    @classmethod
+    def _download(cls,
+                  parameters: Union[str, List[str]],
+                  resolutions: Union[str, List[str]],
+                  years: Union[int, List[int]],
+                  max_workers: int = 5,
+                  show_traceback: bool = False,
+                  **kwargs
+                  ) -> Dict[str, pd.DataFrame]:
+        
+        """Download all valid (parameter, resolution, year) combinations in parallel.
+ 
+        Parameters
+        ----------
+        parameters:
+            One or more parameter names or numeric codes.
+        resolutions:
+            One or more resolution strings (e.g. ``"hourly"``, ``"daily"``).
+        years:
+            One or more calendar years.
+        max_workers:
+            Number of parallel download threads (default 5).
+        show_traceback:
+            If ``True``, print full tracebacks for failed downloads instead of
+            a one-line summary.
+ 
+        Returns
+        -------
+        Dict[str, pd.DataFrame]
+            Mapping of ``filename -> DataFrame`` for every successful download.
+            Failed downloads are logged to stdout; call ``_download_result``
+            variant if you need structured access to failures.
+        """
+
+        if not kwargs.get("silent", True):
+            print(f"Starting parallel download with {max_workers} workers...")
+            print(f"Parameters: {parameters}")
+            print(f"Resolutions: {resolutions}")
+            print(f"Years: {years}")
+
+        combos = cls._parameters_validator(parameters, resolutions, years)
+        if not combos:
+            return {}
+ 
+        # max_workers without touching module-level state.
+        executor = ParallelExecutor(
+            max_workers=max_workers,
+            desc="Downloading EPA data",
+            mode="thread",          
+            show_traceback=show_traceback,
+            )
+        
+        download_parallel = executor(cls._download_single)
+ 
+        result: JobResult = download_parallel(combos)
+ 
+        if result.failed:
+            print(
+                f"\n{len(result.failed)} download(s) failed. "
+                "Retry the failed jobs or inspect result.failed for details."
+            )
+            for failure in result.failed:
+                job_label = (
+                    "{resolution}_{parameter}_{year}".format(**failure.job)
+                )
+                print(f"  [FAILED] {job_label}: {failure.exc}")
+ 
+        return result.succeeded
+
+
+# ---------------------------------------- #
+# AirNow API Handler Class
+# ---------------------------------------- #
 @dataclass
 class AirNowParams:
     startDate: str = field(default_factory=lambda: (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%dT%H"))
@@ -52,6 +328,9 @@ class AirNowParams:
                     setattr(self, f.name, f.default_factory())
                 elif f.default is not MISSING:
                     setattr(self, f.name, f.default)
+        return
+
+
 
 class AirNow:
     """
@@ -245,16 +524,16 @@ class AirNow:
         return data
 
     def import_data(self,
-                    date_start: Optional[Union[str, datetime]] = None,
-                    date_end: Optional[Union[str, datetime]] = None,
+                    start_date: Optional[Union[str, datetime]] = None,
+                    end_date: Optional[Union[str, datetime]] = None,
                     **kwargs
                     ) -> Tuple[Dict[str, Dict[Any, pd.DataFrame]], pd.DataFrame]:
         """
         Imports data from the AirNow API within a specified date range and returns the dataset along with its metadata.
 
         Parameters:
-            date_start (str or datetime, optional): The start date for data import. If provided with `date_end`, data will be fetched for each day in the range.
-            date_end (str or datetime, optional): The end date for data import. Used with `date_start` to define the date range.
+            start_date (str or datetime, optional): The start date for data import. If provided with `end_date`, data will be fetched for each day in the range.
+            end_date (str or datetime, optional): The end date for data import. Used with `start_date` to define the date range.
             **kwargs: Additional keyword arguments to be passed to the AirNowParams constructor and the internal data pulling method. 
                 - silent (bool, optional): If True (default), displays a progress bar during data download.
 
@@ -264,14 +543,14 @@ class AirNow:
                 - metadata (pd.DataFrame): Metadata associated with the imported dataset.
 
         Notes:
-            - If both `date_start` and `date_end` are not provided, data is imported for the default parameters specified in `kwargs`.
+            - If both `start_date` and `end_date` are not provided, data is imported for the default parameters specified in `kwargs`.
             - Uses tqdm for progress indication if `silent` is True.
         """
         silent = kwargs.pop("silent", True)
 
         list_of_params_objs: List[AirNowParams] = []
-        if date_start and date_end: 
-            date_range = [t.strftime("%Y-%m-%dT%H") for t in pd.date_range(start=date_start, end=date_end, freq="1d")]
+        if start_date and end_date: 
+            date_range = [t.strftime("%Y-%m-%dT%H") for t in pd.date_range(start=start_date, end=end_date, freq="1d")]
             list_of_params_objs.extend([
                 AirNowParams(
                     startDate=date_range[i-1], 
@@ -294,12 +573,12 @@ class AirNow:
         
         data: pd.DataFrame = pd.concat(list_of_dfs) if len(list_of_dfs) > 1 else list_of_dfs[0]
         metadata: pd.DataFrame = self._metadata(data)
-        dataset: Dict[str, Dict[Any, pd.DataFrame]] = self._nest(data, metadata)
-        return dataset, metadata
+        # dataset: Dict[str, Dict[Any, pd.DataFrame]] = self._nest(data, metadata)
+        return atmoz_dataset(data=data, metadata=metadata, datatype="surface")
 
     def download_data(self,
-                      date_start: Optional[Union[str, datetime]] = None,
-                      date_end: Optional[Union[str, datetime]] = None,
+                      start_date: Optional[Union[str, datetime]] = None,
+                      end_date: Optional[Union[str, datetime]] = None,
                       output_dir: Optional[Path] = None,
                       max_workers: int = 3,
                       **kwargs
@@ -308,25 +587,23 @@ class AirNow:
         Imports data from the AirNow API within a specified date range and saves it to a Parquet file.
 
         Parameters:
-            date_start (str or datetime, optional): The start date for data import. If provided with `date_end`, data will be fetched for each day in the range.
-            date_end (str or datetime, optional): The end date for data import. Used with `date_start` to define the date range.
+            start_date (str or datetime, optional): The start date for data import. If provided with `end_date`, data will be fetched for each day in the range.
+            end_date (str or datetime, optional): The end date for data import. Used with `start_date` to define the date range.
             **kwargs: Additional keyword arguments to be passed to the AirNowParams constructor and the internal data pulling method. 
                 - silent (bool, optional): If True (default), displays a progress bar during data download.
 
         Returns:
-            tuple:
-                - dataset (dict): The processed dataset containing the imported data, nested as required.
-                - metadata (pd.DataFrame): Metadata associated with the imported dataset.
+            dict: A dictionary containing the imported data and metadata.
 
         Notes:
-            - If both `date_start` and `date_end` are not provided, data is imported for the default parameters specified in `kwargs`.
+            - If both `start_date` and `end_date` are not provided, data is imported for the default parameters specified in `kwargs`.
             - Uses tqdm for progress indication if `silent` is True.
         """
         silent = kwargs.pop("silent", True)
 
         list_of_params_objs: List[AirNowParams] = []
-        if date_start and date_end: 
-            date_range = [t.strftime("%Y-%m-%dT%H") for t in pd.date_range(start=date_start, end=date_end, freq="1D")]
+        if start_date and end_date: 
+            date_range = [t.strftime("%Y-%m-%dT%H") for t in pd.date_range(start=start_date, end=end_date, freq="1D")]
             list_of_params_objs.extend([
                 AirNowParams(
                     startDate=date_range[i-1], 
@@ -351,9 +628,9 @@ class AirNow:
                     print(f"An error occurred: {e}")
 
         df = pd.concat(temp, ignore_index=True)
-        full_query = AirNowParams(startDate=date_start, endDate=date_end, **kwargs)
+        full_query = AirNowParams(startDate=start_date, endDate=end_date, **kwargs)
         df.attrs = {"query_params": asdict(full_query)}
-        filename = f"airnow_api_query_{date_start}_{date_end}.parquet"
+        filename = f"airnow_api_query_{start_date}_{end_date}.parquet"
         if output_dir:
             output_dir.mkdir(parents=True, exist_ok=True)
             filepath = output_dir / filename
@@ -363,11 +640,14 @@ class AirNow:
         df.to_parquet(filepath, index=False)
         return filepath
 
-if __name__ == "__main__": 
-    airnow = AirNow() 
-    dataset, metadata = airnow.import_data()
+    @classmethod
+    def download(cls, endpoint: str = "airnow", **kwargs) -> Path:
+        if endpoint == "airnow":
+            return cls().import_data(**kwargs)
+        elif endpoint == "aqs":
+            return epa_pregen._download(**kwargs)
+        else:
+            raise ValueError(f"Unsupported endpoint: {endpoint}. Valid options are 'airnow' and 'aqs'.")
+        
 
-    print("Metadata:")
-    print(metadata.head())
-    print("\nDataset keys (pollutants):")
-    print(dataset.keys())
+

@@ -6,12 +6,29 @@ Created on Sun Aug 31 09:34:20 2025
 """
 
 #%% 
-from atmoz.resources import useful_functions
+import io
+import zipfile
+import requests
+
 from importlib import resources
 from pathlib import Path
 from typing import Optional
 
 #%% 
+
+def download_zip(url: str, session: requests.Session) -> zipfile.ZipFile:
+    buffer = io.BytesIO()
+
+    with session.get(url, stream=True) as response:
+        response.raise_for_status()
+
+        for chunk in response.iter_content(chunk_size=65536):
+            buffer.write(chunk)
+    
+    buffer.seek(0)
+
+    return zipfile.ZipFile(buffer)
+
 
 def get_asset(filename: str, package: str = "atmoz") -> Optional[Path]:
     """
@@ -45,7 +62,7 @@ def merge_dicts(default, override):
     for k, v in override.items():
         if isinstance(v, dict) and isinstance(result.get(k), dict):
             # merge nested dicts
-            result[k] = useful_functions.merge_dicts(result.get(k, {}), v)
+            result[k] = merge_dicts(result.get(k, {}), v)
         else:
             # override or add new key
             result[k] = v

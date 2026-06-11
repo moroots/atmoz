@@ -30,7 +30,12 @@ dependencies = [
     "h5py>=3.11.0",
     "windrose>=1.9.2",
     "beautifulsoup4>=4.14.3",
-    "netcdf4>=1.7.2"
+    "netcdf4>=1.7.2",
+    "pint>=0.21.1",
+    "nbformat>=4.2.0",
+    "xarray>=2023.1.0",
+    "nbconvert>=7.16.6",
+    "ipykernel>=6.29.5",
 ]
 
 [project.scripts]

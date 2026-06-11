@@ -70,3 +70,27 @@ def h5Dataset_timestamp(dataset_time, units_key=None):
     timestamps = ref_time + pd.to_timedelta(datetime, unit=unit_str)
 
     return timestamps
+
+def format_resolution(delta: pd.Timedelta) -> str:
+    """Convert a Timedelta to a human-readable resolution string."""
+    if pd.isna(delta):
+        return "unknown"
+
+    total_seconds = int(delta.total_seconds())
+
+    thresholds = [
+        (365 * 24 * 3600, "year"),
+        (30  * 24 * 3600, "month"),
+        (7   * 24 * 3600, "week"),
+        (24  * 3600,      "day"),
+        (3600,            "hour"),
+        (60,              "minute"),
+        (1,               "second"),
+    ]
+
+    for seconds, label in thresholds:
+        if total_seconds >= seconds:
+            value = total_seconds // seconds
+            return f"{value} {label}{'s' if value > 1 else ''}"
+
+    return "sub-second"
