@@ -199,3 +199,6 @@ coverage/
 # Misc large data
 *.h5part
 *.ncx
+
+# GEOS-CF local OPeNDAP cache
+.geos_cf_cache/
