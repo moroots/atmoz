@@ -74,7 +74,7 @@ tolnet_plot_params = {
         "ticks": [0.001, *np.arange(10, 121, 10), 150, 200, 300, 600],
         "sub_functions": {
             "set_label": {
-                "label": "Ozone Mixing Ration ($ppb_v$)",
+                "label": "Ozone Mixing Ratio ($ppb_v$)",
                 "weight": "bold",
                 "size": 16
                 },
