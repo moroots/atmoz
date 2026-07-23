@@ -202,3 +202,6 @@ coverage/
 
 # GEOS-CF local OPeNDAP cache
 .geos_cf_cache/
+
+# Develpment
+uv.lock

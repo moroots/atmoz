@@ -358,7 +358,10 @@ class AirNow:
             api_key (str, optional): API key for AirNow API. If None, retrieves from keyring.
         """
         if api_key is None:
-            self.api_key = keyring.get_password("EPA_AirNow", "API_KEY")
+            try:
+                self.api_key = keyring.get_password("EPA_AirNow", "API_KEY")
+            except Exception as e:
+                self.api_key = input("EPA AIRNOW API KEY: ")
         else:
             self.api_key = api_key
 
@@ -386,6 +389,11 @@ class AirNow:
         Returns:
             str: Constructed URL with query parameters.
         """
+        if kwargs.get("api_key", None):
+            API_KEY = kwargs.get("api_key")
+        else:
+            API_KEY = self.api_key or input("EPA AIRNOW API KEY: ")
+
         startDate = kwargs.get("startDate", (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%dT%H"))
         endDate = kwargs.get("endDate", (datetime.now(UTC)).strftime("%Y-%m-%dT%H"))
         parameters = kwargs.get("parameters", ["OZONE", "PM25", "PM10", "CO", "NO2", "SO2"])
@@ -401,7 +409,7 @@ class AirNow:
             'verbose': kwargs.get("verbose", "1"),
             'monitorType': kwargs.get("monitorType", "0"),
             'includerawconcentrations': "1",
-            'API_KEY': self.api_key
+            'API_KEY': API_KEY
             }
 
         self._queries_strings.append('&'.join(f"{key}={value}" for key, value in query_params.items()))
@@ -643,6 +651,11 @@ class AirNow:
     @classmethod
     def download(cls, endpoint: str = "airnow", **kwargs) -> Path:
         if endpoint == "airnow":
+            if not kwargs.get("api_key"):
+                try:
+                    kwargs["api_key"] = keyring.get_password("EPA_AirNow", "API_KEY")
+                except Exception as e:
+                    kwargs["api_key"] = input("EPA AIRNOW API KEY: ")
             return cls().import_data(**kwargs)
         elif endpoint == "aqs":
             return epa_pregen._download(**kwargs)
