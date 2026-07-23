@@ -651,12 +651,8 @@ class AirNow:
     @classmethod
     def download(cls, endpoint: str = "airnow", **kwargs) -> Path:
         if endpoint == "airnow":
-            if not kwargs.get("api_key"):
-                try:
-                    kwargs["api_key"] = keyring.get_password("EPA_AirNow", "API_KEY")
-                except Exception as e:
-                    kwargs["api_key"] = input("EPA AIRNOW API KEY: ")
-            return cls().import_data(**kwargs)
+            api_key = kwargs.pop("api_key", None)
+            return cls(api_key=api_key).import_data(**kwargs)
         elif endpoint == "aqs":
             return epa_pregen._download(**kwargs)
         else:
