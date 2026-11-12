@@ -4,16 +4,22 @@ atmoz/
 │   └── watermarks/
 ├── data_access/
 │   └── NASA.py
+├── dataclasses/
+│   ├── AtmoDataset.py
+│   └── AtmoFrame.py
 ├── lidar/
-│   └── TOLNet.py
+│   └── tolnet.py
 ├── models/
 │   └── geos_cf.py
 ├── resources/
 │   ├── atmoz_dataclasses.py
-│   ├── colorbars.py
-│   ├── debug.py
-│   ├── default_plot_params.py
-│   ├── plot_utilities.py
-│   └── useful_functions.py
-└── surface/
-    └── AirNow.py
+│   ├── cache.py
+│   ├── credentials.py
+│   ├── parallelExecutor.py
+│   ├── sessionHandler.py
+│   ├── urls.py
+│   └── ... (plotting, time and path helpers)
+├── surface/
+│   ├── AirNow.py
+│   └── utilities.py
+└── exceptions.py

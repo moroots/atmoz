@@ -1,49 +1,109 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "atmoz"
-version = "0.0.1"
-description = "Atmoshperic Science Toolkit focused on Groundbased Datasets"
+version = "0.1.0"
+description = "Atmospheric science toolkit focused on ground-based datasets"
 readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 authors = [
     { name = "Maurice Roots", email = "mrmoroots@gmail.com" }
 ]
-requires-python = ">=3.8"
+keywords = ["atmospheric science", "air quality", "ozone", "lidar", "TOLNet", "AirNow", "EPA AQS", "GEOS-CF"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Typing :: Typed",
+]
+
+# Core install: enough for the data classes and the surface (AirNow / EPA AQS)
+# downloaders. Everything heavier lives in an extra, see below.
 dependencies = [
-    "pandas",
-    "numpy",
-    "pyarrow",
-    "pyyaml",
-    "requests",
-    "matplotlib",
-    "tqdm",
-    "pydantic>=2.10.6",
-    "httpx>=0.28.1",
-    "earthaccess>=0.9.0",
-    "keyring>=25.5.0",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "pyarrow>=14",
+    "requests>=2.31",
+    "tqdm>=4.66",
+    "matplotlib>=3.7",
+    "pint>=0.21.1",
+]
+
+[project.optional-dependencies]
+surface = [
     "geopandas>=0.13.2",
-    "scipy>=1.10.1",
+    "shapely>=2.0.7",
+    "plotly>=6.5.2",
+]
+lidar = [
+    "pydantic>=2.10.6",
+    "pyyaml",
+    "python-dateutil>=2.8.2",
+    "earthaccess>=0.9.0",
+]
+models = [
+    "pydantic>=2.10.6",
+    "xarray>=2023.1.0",
+    "netcdf4>=1.7.2",
+]
+nasa = [
+    "pydantic>=2.10.6",
+    "earthaccess>=0.9.0",
+]
+# Older DATAS-era helpers in atmoz.resources (importData, makePlots, getData, geoSlicing).
+legacy = [
+    "geopandas>=0.13.2",
     "shapely>=2.0.7",
     "plotly>=6.5.2",
     "h5py>=3.11.0",
     "windrose>=1.9.2",
     "beautifulsoup4>=4.14.3",
-    "netcdf4>=1.7.2",
-    "pint>=0.21.1",
-    "nbformat>=4.2.0",
-    "xarray>=2023.1.0",
-    "nbconvert>=7.16.6",
-    "ipykernel>=6.29.5",
+    "charset-normalizer",
+]
+all = ["atmoz[surface,lidar,models,nasa,legacy]"]
+dev = [
+    "pytest>=8",
+    "pytest-cov",
+    "ruff",
+    "build",
+    "mkdocs",
+    "mkdocs-material",
 ]
 
-[project.scripts]
-atmoz-project = "atmoz.resources.projects:main"
+[project.urls]
+Homepage = "https://github.com/moroots/atmoz"
+Repository = "https://github.com/moroots/atmoz"
+Issues = "https://github.com/moroots/atmoz/issues"
+Changelog = "https://github.com/moroots/atmoz/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["atmoz*"]
+namespaces = false
 
 [tool.setuptools.package-data]
-"atmoz.schemas" = ["*.arrow"]
+atmoz = ["py.typed", "assets/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["dev"]
+
+[tool.ruff.lint]
+# Correctness only for now: syntax errors, undefined names, unused imports/vars in new code.
+select = ["E9", "F63", "F7", "F82", "F401", "F841"]
+# atmoz_dataclasses.py: `ureg` is referenced but its definition is commented out (known issue, tracked for 0.1.1).
+per-file-ignores = { "atmoz/resources/atmoz_dataclasses.py" = ["F401", "F841", "F821"], "atmoz/resources/*" = ["F401", "F841"], "atmoz/lidar/*" = ["F401", "F841"], "atmoz/models/*" = ["F401", "F841"], "atmoz/dataclasses/*" = ["F401", "F841"], "atmoz/data_access/*" = ["F401", "F841"], "atmoz/surface/utilities.py" = ["F401", "F841"] }

@@ -6,10 +6,17 @@ Surface data utility functions for EPA AQS and AirNow workflows.
 from itertools import cycle
 from typing import Dict, List, Optional, Tuple
 
-import geopandas as gpd
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
+
+try:
+    import geopandas as gpd
+    import plotly.graph_objects as go
+except ModuleNotFoundError as exc:  # pragma: no cover
+    raise ImportError(
+        f"atmoz.surface.utilities needs optional dependencies ({exc.name!r} is missing). "
+        'Install them with: pip install "atmoz[surface]"'
+    ) from exc
 
 from atmoz.resources import useful_functions
 from atmoz.resources.timeConversions import format_resolution

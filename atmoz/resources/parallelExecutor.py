@@ -128,6 +128,10 @@ class ParallelExecutor:
         warn_collisions: If ``True`` (default), emit a ``UserWarning`` when
                          two jobs produce the same key and the earlier result
                          is overwritten.
+        progress:        If ``False``, do not draw the tqdm progress bar.
+        print_failures:  If ``False``, do not print a line per failed job
+                         (callers that raise on ``result.failed`` themselves
+                         do not need the duplicate output).
 
     Example::
 
@@ -154,6 +158,8 @@ class ParallelExecutor:
         show_traceback: bool = False,
         on_error: Optional[Callable[[dict, Exception], None]] = None,
         warn_collisions: bool = True,
+        progress: bool = True,
+        print_failures: bool = True,
     ):
         if mode not in {"thread", "process"}:
             raise ValueError("mode must be 'thread' or 'process'")
@@ -164,6 +170,8 @@ class ParallelExecutor:
         self.show_traceback = show_traceback
         self.on_error = on_error
         self.warn_collisions = warn_collisions
+        self.progress = progress
+        self.print_failures = print_failures
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -185,11 +193,10 @@ class ParallelExecutor:
                 "lambda or closure."
             ) from exc
 
-    @staticmethod
-    def _iterate(futures, total: int, desc: str):
-        """Wrap ``as_completed`` with tqdm when available."""
+    def _iterate(self, futures, total: int, desc: str):
+        """Wrap ``as_completed`` with tqdm when available and enabled."""
         completed = as_completed(futures)
-        if _TQDM_AVAILABLE:
+        if _TQDM_AVAILABLE and self.progress:
             return tqdm(completed, total=total, desc=desc)
         return completed
 
@@ -265,7 +272,9 @@ class ParallelExecutor:
                                     stacklevel=2,
                                 )
 
-                        if self.show_traceback:
+                        if not self.print_failures:
+                            pass
+                        elif self.show_traceback:
                             print(
                                 "".join(
                                     traceback.format_exception(

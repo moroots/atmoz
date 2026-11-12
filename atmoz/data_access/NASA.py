@@ -21,11 +21,10 @@ from atmoz.resources.useful_functions import merge_dicts
 try:
     import earthaccess
 except ModuleNotFoundError:
-    print("Please install 'earthaccess' \n"
-          "Use this link for instruction: "
-          "https://earthaccess.readthedocs.io/en/stable/quick-start/"
-          )
-    raise ModuleNotFoundError("Please install 'earthaccess' to use this module.")
+    raise ModuleNotFoundError(
+        "atmoz.data_access.NASA needs 'earthaccess'. Install it with: pip install \"atmoz[nasa]\" "
+        "(see https://earthaccess.readthedocs.io/en/stable/quick-start/)."
+    )
 
 class EarthDataLogin(BaseModel):
     model_config = ConfigDict(populate_by_name=True)

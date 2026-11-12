@@ -36,6 +36,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Internal
 from atmoz.resources import plot_utilities, useful_functions, colorbars, default_plot_params
+from atmoz.resources.urls import build_url
 from atmoz import models
 from atmoz.data_access.NASA import EarthData
 
@@ -211,14 +212,14 @@ class TOLNET:
     @cached_property
     def api_schema(self):
         """Returns a yaml object containing api_schema information."""
-        response = requests.get(self.base_url + "/openapi.yml")
+        response = requests.get(build_url(self.base_url, "openapi.yml"))
         response.raise_for_status()
         return yaml.safe_load(response.text)
 
     @cached_property
     def products(self) -> pd.DataFrame:
         """Returns a DataFrame of all product types."""
-        response = requests.get(self.base_url + r"/data/product_types")
+        response = requests.get(build_url(self.base_url, "data", "product_types"))
         response.raise_for_status()
         return (
             pd.DataFrame(response.json())
@@ -229,7 +230,7 @@ class TOLNET:
     @cached_property
     def file_types(self) -> pd.DataFrame:
         """Returns a DataFrame of all file types."""
-        response = requests.get(self.base_url + r"/data/file_types")
+        response = requests.get(build_url(self.base_url, "data", "file_types"))
         response.raise_for_status()
         return (
             pd.DataFrame(response.json())
@@ -240,7 +241,7 @@ class TOLNET:
     @cached_property
     def instrument_groups(self) -> pd.DataFrame:
         """Returns a DataFrame of all instrument groups."""
-        response = requests.get(self.base_url + r"/instruments/groups")
+        response = requests.get(build_url(self.base_url, "instruments", "groups"))
         response.raise_for_status()
         return (
             pd.DataFrame(response.json())
@@ -251,7 +252,7 @@ class TOLNET:
     @cached_property
     def processing_types(self) -> pd.DataFrame:
         """Returns a DataFrame of all processing types."""
-        response = requests.get(self.base_url + r"/data/processing_types")
+        response = requests.get(build_url(self.base_url, "data", "processing_types"))
         response.raise_for_status()
         return (
             pd.DataFrame(response.json())
@@ -271,7 +272,7 @@ class TOLNET:
         page = 1
 
         while True:
-            url = f"{self.base_url}/data/{page}"
+            url = build_url(self.base_url, "data", page)
             response = session.get(url, params=query_dict, timeout=10)
             if response.status_code != 200:
                 break
@@ -307,7 +308,7 @@ class TOLNET:
             "exact_match" (default), "begins_with", or "ends_with".
         """
         response = requests.get(
-            f"{self.base_url}/data/search_by_file_name",
+            build_url(self.base_url, "data", "search_by_file_name"),
             params={"file_name": file_name, "match_type": match_type},
             timeout=10,
             )
@@ -341,7 +342,7 @@ class TOLNET:
             params["product_type"] = str(product_type)
         if processing_type is not None:
             params["processing_type"] = str(processing_type)
-        response = requests.get(f"{self.base_url}/data/calendar", params=params, timeout=10)
+        response = requests.get(build_url(self.base_url, "data", "calendar"), params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
         if not data:
@@ -360,7 +361,7 @@ class TOLNET:
         return self
 
     def _json_to_dict(self, file_id: int) -> dict:
-        url = f"{self.base_url}/data/json/{file_id}"
+        url = build_url(self.base_url, "data", "json", file_id)
         response = requests.get(url)
         response.raise_for_status()
         return response.json()
@@ -468,7 +469,7 @@ class TOLNET:
         return self
 
     def _download(self, file_id: Union[int, str], url_path: str):
-        url = f"{self.base_url}{url_path}/{file_id}"
+        url = build_url(self.base_url, *url_path.strip("/").split("/"), file_id)
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             return file_id, response.content
@@ -509,10 +510,10 @@ class TOLNET:
 
         for idx, file_id in enumerate(files_list.id, start=1):
             if file_type == "json":
-                url = f"{self.base_url}/data/json/{file_id}"
+                url = build_url(self.base_url, "data", "json", file_id)
                 ext = "json"
             elif file_type == "hdf":
-                url = f"{self.base_url}/data/download/{file_id}"
+                url = build_url(self.base_url, "data", "download", file_id)
                 ext = "hdf"
             else:
                 raise ValueError("file_type must be 'json' or 'hdf'")
@@ -547,10 +548,10 @@ class TOLNET:
 
         def download_one(file_id):
             if file_type == "json":
-                url = f"{self.base_url}/data/json/{file_id}"
+                url = build_url(self.base_url, "data", "json", file_id)
                 ext = "json"
             elif file_type == "hdf":
-                url = f"{self.base_url}/data/download/{file_id}"
+                url = build_url(self.base_url, "data", "download", file_id)
                 ext = "hdf"
             else:
                 raise ValueError("file_type must be 'json' or 'hdf'")

@@ -19,6 +19,8 @@ import warnings
 
 from importlib.resources import files
 
+from atmoz.resources.cache import atmoz_home
+
 SCHEMA = {
     "machines": """
 CREATE TABLE IF NOT EXISTS machines (
@@ -69,7 +71,7 @@ class PathManager:
             self.path_file = Path(paths_file)
         else:
             # convert resource to a filesystem Path string and wrap with Path
-            self.path_file = Path(__file__).parent / "config" / "atmoz.paths"
+            self.path_file = atmoz_home() / "atmoz.paths"  # per-user; the install dir may be read-only
 
         # ensure parent dirs exist
         self.path_file.parent.mkdir(parents=True, exist_ok=True)

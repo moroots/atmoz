@@ -1,73 +1,126 @@
 # Atmoz
 
-**Atmoz** is an evolving Python package designed to streamline the handling, analysis, and visualization of atmospheric science datasets. Building upon the foundation laid by the previous [DATAS](https://github.com/moroots/DATAS) package, Atmoz aims to provide a more modular, efficient, and user-friendly toolkit for atmospheric researchers.
+**Atmoz** is a Python toolkit for handling, analysing and visualising ground-based atmospheric datasets.
+It builds on the earlier [DATAS](https://github.com/moroots/DATAS) package, with a more modular, faster
+and lighter design. It is a dev / science tool: it makes common things fast and stays out of your way for the rest.
 
 ## Table of Contents
 
-* [Project Overview](#project-overview)
-* [Current Capabilities](#current-capabilities)
-* [Directory Structure](#directory-structure)
+* [Features](#features)
 * [Installation](#installation)
-* [Usage](#usage)
+* [Quick start](#quick-start)
+* [Credentials and caching](#credentials-and-caching)
+* [Documentation](#documentation)
+* [Directory structure](#directory-structure)
+* [Development](#development)
 * [License](#license)
 
----
+## Features
 
-## Project Overview
+* **EPA surface air quality** (`atmoz.surface`): the live **AirNow** API and the bulk **EPA AQS** yearly files.
+  Streamed to a disk cache, parsed with Arrow's multi-threaded CSV reader (full-precision `float64`
+  coordinates, `category` text columns), downloaded in parallel, all-or-nothing on failure.
+* **TOLNet ozone lidar** (`atmoz.lidar`): query, download and plot NASA TOLNet profiles.
+* **GEOS-CF model output** (`atmoz.models`): point extractions through OPeNDAP with a local cache.
+* **Data classes** (`atmoz.dataclasses`): `AtmoFrame` / `AtmoDataset` containers.
+* **Shared plumbing**: thread-safe HTTP sessions with retries, a file cache, a `.atmoz.env` secret store.
 
-Atmoz is developed by me (Maurice Roots). Any contributions by others will be expressly noted. The package is designed to facilitate the processing, analysis, and visualization of atmospheric science datasets from various data sources and instruments (satellite, surface, profiles, etc).
+## Installation
 
-The initial release focuses on integrating and analyzing data from the **TOLNet** network, a NASA-led initiative that provides high-resolution vertically resolved ozone profiles. Future versions will expand to include support for other datasets and instruments, following the modular architecture established in this release.
+Requires **Python 3.11+**.
 
-## Current Capabilities
+```bash
+pip install git+https://github.com/moroots/atmoz                       # core (AirNow / EPA AQS, data classes)
+pip install "atmoz[surface,lidar] @ git+https://github.com/moroots/atmoz"   # add extras as needed
+```
 
-As of the latest update, Atmoz offers:
+Extras: `surface` (maps / geo helpers), `lidar`, `models`, `nasa`, `legacy`, `all`, `dev`.
+See the [installation guide](docs/installation.md).
 
-* **TOLNet Integration**: Functions for downloading, processing, and visualizing TOLNet data.
-* **Data Wrangling Utilities**: Tools for cleaning and transforming raw atmospheric data into analysis-ready formats.
-* **Visualization Tools**: Functions for generating plots and figures to aid in data interpretation.
+## Quick start
 
-The package is structured to allow easy extension, with plans to incorporate support for additional datasets and instruments in future releases.
+```python
+from atmoz.surface import AirNow
 
-## Directory Structure
+# Bulk EPA AQS: national hourly ozone for 2025 -> {"hourly_44201_2025.csv": DataFrame}
+data = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025)
+
+# Only what you need: a bounding box and a few columns
+dc = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025,
+                     bbox=(-77.5, 38.5, -76.5, 39.5),
+                     columns=["Latitude", "Longitude", "Date GMT", "Time GMT", "Sample Measurement"])
+
+# Live AirNow API (free key from https://docs.airnowapi.org/): save it once, use it forever
+AirNow.set_api_key()
+dataset = AirNow().import_data("2025-08-01", "2025-08-07", parameters=["OZONE", "PM25"])
+dataset.data, dataset.metadata
+```
+
+```python
+from atmoz.lidar import TOLNET            # pip install "atmoz[lidar]"
+
+tolnet = TOLNET()
+tolnet.import_data(min_date="2025-07-28", max_date="2025-08-01", product_type=[4], processing_type=[1])
+tolnet.tolnet_curtains()
+```
+
+## Credentials and caching
+
+* **API keys** live in a `.atmoz.env` file (`~/.atmoz/.atmoz.env` for you, or `./.atmoz.env` per project) or the
+  `ATMOZ_AIRNOW_API_KEY` environment variable. `AirNow.set_api_key()` writes it for you. atmoz never prompts for a
+  missing key and never puts it in an error message. See [Configuration](docs/configuration.md).
+* **Downloads** are cached in `~/.atmoz/cache` (`atmoz.cache_info()`, `atmoz.clear_cache()`). See [Caching](docs/caching.md).
+
+## Documentation
+
+Guides live in [`docs/`](docs) (build them with `mkdocs serve`):
+[Installation](docs/installation.md) · [Configuration](docs/configuration.md) · [Caching](docs/caching.md) ·
+[Surface](docs/surface.md) · [Lidar](docs/lidar.md) · [Models](docs/models.md). Release notes: [CHANGELOG](CHANGELOG.md).
+
+## Directory structure
 
 <!-- START FILETREE -->
- ``` 
+```
 atmoz/
 ├── assets/
 │   ├── package_info/
 │   └── watermarks/
 ├── data_access/
 │   └── NASA.py
+├── dataclasses/
+│   ├── AtmoDataset.py
+│   └── AtmoFrame.py
 ├── lidar/
-│   └── TOLNet.py
+│   └── tolnet.py
 ├── models/
 │   └── geos_cf.py
 ├── resources/
 │   ├── atmoz_dataclasses.py
-│   ├── colorbars.py
-│   ├── debug.py
-│   ├── default_plot_params.py
-│   ├── plot_utilities.py
-│   └── useful_functions.py
-└── surface/
-    └── AirNow.py
- ``` 
+│   ├── cache.py
+│   ├── credentials.py
+│   ├── parallelExecutor.py
+│   ├── sessionHandler.py
+│   ├── urls.py
+│   └── ... (plotting, time and path helpers)
+├── surface/
+│   ├── AirNow.py
+│   └── utilities.py
+└── exceptions.py
+```
 <!-- END FILETREE -->
 
-## Installation
-
-To install Atmoz, you can use pip:
+## Development
 
 ```bash
-pip install git+https://github.com/moroots/atmoz
+uv venv && uv pip install -e ".[all,dev]"
+pytest                      # offline: HTTP is faked
+ruff check atmoz tests
 ```
+
+CI (GitLab) runs the tests on Python 3.11 - 3.13, lints, and checks the built wheel.
 
 ## License
 
 Copyright (c) 2025 Maurice Roots
 
 Atmoz is licensed under the [GNU General Public License v3.0 (GPLv3)](https://www.gnu.org/licenses/gpl-3.0.html).
-
-
-

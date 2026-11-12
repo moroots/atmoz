@@ -92,11 +92,6 @@ composer.lock
 *.secret
 atmoz.egg-info/
 atmoz/.ipynb_checkpoints/
-# Ignore config directory and any files within it
-config/
-config/**
-uv.lock 
-
 # ===================================
 # IDE / EDITORS
 # ===================================
@@ -203,5 +198,11 @@ coverage/
 # GEOS-CF local OPeNDAP cache
 .geos_cf_cache/
 
-# Develpment
+# ===================================
+# atmoz: local secrets, cache, lockfile
+# ===================================
+.atmoz.env
+atmoz.env
+.atmoz/
 uv.lock
+site/

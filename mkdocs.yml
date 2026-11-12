@@ -1,0 +1,16 @@
+site_name: atmoz
+site_description: Atmospheric science toolkit focused on ground-based datasets
+repo_url: https://github.com/moroots/atmoz
+docs_dir: docs
+
+theme:
+  name: material
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Configuration: configuration.md
+  - Caching: caching.md
+  - Surface (AirNow / EPA AQS): surface.md
+  - Lidar (TOLNet): lidar.md
+  - Models (GEOS-CF): models.md

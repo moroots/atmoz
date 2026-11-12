@@ -1,0 +1,52 @@
+# Tests on every supported Python, lint, and a packaging smoke test.
+# Tests never touch the network (HTTP is faked), so this is fast and deterministic.
+
+stages: [test, build]
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  paths: [.cache/pip]
+
+.py_job: &py_job
+  before_script:
+    - python --version
+    - pip install -e ".[surface,lidar,models,nasa,dev]"
+
+lint:
+  <<: *py_job
+  stage: test
+  image: python:3.13
+  script:
+    - ruff check atmoz tests
+
+test:
+  <<: *py_job
+  stage: test
+  image: python:$PYTHON_VERSION
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.11", "3.12", "3.13"]
+  script:
+    - pytest --cov=atmoz --cov-report=term
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+
+core-install:
+  # The core install (no extras) must import and run the surface downloaders.
+  stage: test
+  image: python:3.11
+  script:
+    - pip install -e ".[dev]"
+    - pytest tests/test_package.py tests/test_aqs.py tests/test_airnow.py tests/test_cache.py tests/test_credentials.py tests/test_urls.py
+
+wheel:
+  stage: build
+  image: python:3.13
+  script:
+    - pip install build
+    - python -m build
+    - python tools/check_wheel.py
+  artifacts:
+    paths: [dist/]
+    expire_in: 1 week

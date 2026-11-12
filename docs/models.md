@@ -8,6 +8,8 @@ GEOS-CF provides hourly atmospheric chemistry, composition, and meteorology fiel
 from atmoz.models import GEOS_CF
 ```
 
+Install the extra first: `pip install "atmoz[models]"`.
+
 ---
 
 ## Quick Start
@@ -162,7 +164,7 @@ geos.fetch(
 | `collection` | `str` | `"aqc"` | `"aqc"`, `"chm"`, or `"met"` |
 | `mode` | `str` | `"assim"` | `"assim"` (historical) or `"fcast"` (forecast) |
 | `variables` | `List[str]` | collection defaults | Variable name(s) to retrieve (lowercase). Pass `None` for all. |
-| `cache_dir` | `str` | `None` | Path to local cache directory. If set, data is read from cache on repeat calls. |
+| `cache_dir` | `str` | `None` | Path to local cache directory. If set, data is read from cache on repeat calls. (Moving this onto the shared atmoz cache is planned for 0.1.1.) |
 | `force_download` | `bool` | `False` | Re-download even if a valid cache file exists. |
 
 **Returns:** `self` (chainable). Result stored in `self.data[(lat_lon, mode, collection)]`.

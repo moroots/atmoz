@@ -8,6 +8,8 @@ TOLNet is a network of ground-based ozone lidar instruments operated across Nort
 from atmoz.lidar import TOLNET
 ```
 
+Install the extra first: `pip install "atmoz[lidar]"`. JSON downloads need no login; HDF downloads need NASA EarthData credentials (see [Configuration](configuration.md#nasa-earthdata)).
+
 ---
 
 ## Quick Start
