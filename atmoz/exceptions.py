@@ -39,6 +39,13 @@ class NoDataError(AtmozError, LookupError):
     """
 
 
+class RequestTooLargeError(AtmozError, ValueError):
+    """A request would download or hold more than the safety thresholds allow.
+
+    Nothing was downloaded. Narrow the request, or pass ``allow_large=True`` if you really want it.
+    """
+
+
 class APIError(AtmozError):
     """A web API answered with an error (or could not be reached).
 

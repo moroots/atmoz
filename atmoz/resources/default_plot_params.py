@@ -1,44 +1,10 @@
 import numpy as np
 
-curtain_plot_theme = {
-            # ime_Tick label font sizes
-            "xtick.labelsize": 12,      # previously params["fontsize_ticks"]
-            "ytick.labelsize": 12,
+from atmoz.plotting.styles import styles
 
-            # Axes labels
-            "axes.labelsize": 14,       # previously params["fontsize_label"]
-
-            # Title font
-            "axes.titlesize": 16,       # previously params["title"]["fontsize"]
-            "axes.titleweight": "bold",
-
-            # Grid style
-            "axes.grid": True,
-            "grid.linestyle": "--",
-            "grid.alpha": 0.7,
-            "axes.grid.which": "both",
-
-            # Minor ticks
-            "xtick.minor.visible": True,
-            "ytick.minor.visible": True,
-            "xtick.minor.size": 3,
-            "ytick.minor.size": 3,
-            "xtick.minor.width": 0.5,
-            "ytick.minor.width": 0.5,
-
-            # Major ticks
-            "xtick.major.size": 5,
-            "ytick.major.size": 5,
-            "xtick.major.width": 1,
-            "ytick.major.width": 1,
-
-            # Figure size (optional)
-            "figure.figsize": (20, 6),
-
-            # Fonts
-            "font.family": "Courier New",
-            "font.size": 14
-            }
+# The curtain look now lives in atmoz.plotting.styles (fonts that exist everywhere, a 11 x 4.4 in figure).
+# TOLNET.plot_curtain still reads these names.
+curtain_plot_theme = {**styles.curtain.rc, "figure.figsize": styles.curtain.figsize}
 
 tolnet_plot_params = {
     "ax.set_ylabel": {
@@ -55,7 +21,7 @@ tolnet_plot_params = {
 
     "ax.set_title": {
         "label": r"Ozone Mixing Ratio Profile",
-        "fontsize": 16
+        "fontsize": 13
         },
 
     "ax.grid": {
@@ -67,7 +33,7 @@ tolnet_plot_params = {
 
     "ax.set_ylim": [0, 15],
 
-    "fig.tight_layout": {},
+    # no "fig.tight_layout": the curtain style uses constrained layout, which handles the colorbar
 
     "fig.colorbar": {
         "pad": 0.01, 
@@ -76,11 +42,11 @@ tolnet_plot_params = {
             "set_label": {
                 "label": "Ozone Mixing Ratio ($ppb_v$)",
                 "weight": "bold",
-                "size": 16
+                "size": 11
                 },
                     
             "ax.tick_params": {
-                "labelsize": 16
+                "labelsize": 9
                 }
             }
         }

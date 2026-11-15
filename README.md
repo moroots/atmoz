@@ -21,7 +21,7 @@ and lighter design. It is a dev / science tool: it makes common things fast and 
   Streamed to a disk cache, parsed with Arrow's multi-threaded CSV reader (full-precision `float64`
   coordinates, `category` text columns), downloaded in parallel, all-or-nothing on failure.
 * **TOLNet ozone lidar** (`atmoz.lidar`): query, download and plot NASA TOLNet profiles.
-* **UCN ceilometers** (`atmoz.lidar`): Unified Ceilometer Network backscatter and boundary-layer files as `xarray` datasets.
+* **UCN ceilometers** (`atmoz.lidar`): Unified Ceilometer Network 10-minute backscatter and boundary-layer data as DataFrames, cached compactly as parquet.
 * **GEOS-CF model output** (`atmoz.models`): point extractions through OPeNDAP with a local cache.
 * **Data classes** (`atmoz.dataclasses`): `AtmoFrame` / `AtmoDataset` containers.
 * **Shared plumbing**: thread-safe HTTP sessions with retries, a file cache, a `.atmoz.env` secret store.

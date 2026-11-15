@@ -23,6 +23,8 @@ _LAZY = {
     "set_secret": ("atmoz.resources.credentials", "set_secret"),
     "get_secret": ("atmoz.resources.credentials", "get_secret"),
     "delete_secret": ("atmoz.resources.credentials", "delete_secret"),
+    "plot": ("atmoz.plotting", "plot"),
+    "plotting": ("atmoz.plotting", None),   # the submodule itself: atmoz.plotting.styles.curtain
     "cache_dir": ("atmoz.resources.cache", "cache_dir"),
     "cache_info": ("atmoz.resources.cache", "cache_info"),
     "clear_cache": ("atmoz.resources.cache", "clear_cache"),
@@ -36,7 +38,8 @@ def __getattr__(name: str):
         module, attr = _LAZY[name]
     except KeyError:
         raise AttributeError(f"module 'atmoz' has no attribute {name!r}") from None
-    value = getattr(import_module(module), attr)
+    loaded = import_module(module)
+    value = loaded if attr is None else getattr(loaded, attr)
     globals()[name] = value
     return value
 

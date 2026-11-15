@@ -43,8 +43,10 @@ def default_session_handler() -> SessionHandler:
     global _default_handler
     with _lock:
         if _default_handler is None:
+            from atmoz import __version__
             _default_handler = SessionHandler(
                 pool_connections=10, pool_maxsize=10, max_retries=3, backoff_factor=0.5, timeout=(5.0, 60.0),
+                user_agent=f"atmoz/{__version__}",
             )
         return _default_handler
 

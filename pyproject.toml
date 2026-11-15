@@ -71,7 +71,14 @@ legacy = [
     "beautifulsoup4>=4.14.3",
     "charset-normalizer",
 ]
-all = ["atmoz[surface,lidar,models,nasa,legacy]"]
+# Optional plotting backends: plotly (interactive maps) and windrose (wind roses).
+plots = [
+    "plotly>=6.5.2",
+    "windrose>=1.9.2",
+    "geopandas>=0.13.2",
+    "shapely>=2.0.7",
+]
+all = ["atmoz[surface,lidar,models,nasa,legacy,plots]"]
 dev = [
     "pytest>=8",
     "pytest-cov",

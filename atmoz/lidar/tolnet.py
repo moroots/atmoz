@@ -591,8 +591,14 @@ class TOLNET:
               xlims : "auto" | [min_date_str, max_date_str]
               time_resolution : "auto" | pandas offset string (e.g. "30min")
               use_contourf : bool (default False, uses pcolormesh)
+              show : bool (default False); call ``plt.show()`` at the end (scripts)
+
+        Returns
+        -------
+        (fig, ax)
         """
         import copy
+        show = kwargs.pop("show", False)   # True: call plt.show() (scripts); notebooks display the figure on their own
         params = copy.deepcopy(useful_functions.merge_dicts(self.plot_params, kwargs))
         xlims = params.pop("xlims", "auto")
         time_resolution = params.pop("time_resolution", "auto")
@@ -658,8 +664,9 @@ class TOLNET:
             if self.nrt is True:
                 plot_utilities.apply_near_real_time(ax)
 
-            plt.show()
-        return
+            if show:
+                plt.show()
+        return fig, ax
 
     def tolnet_curtains(self, **kwargs):
         """Plot one curtain per (instrument_group, processing_type, lat_lon) key."""
@@ -685,5 +692,6 @@ if __name__ == "__main__":
         )
 
     tolnet.plot_curtain(
-        tolnet.data[("NASA JPL SMOL-2", "Centrally Processed (GLASS)", "39.24x-76.363")]
+        tolnet.data[("NASA JPL SMOL-2", "Centrally Processed (GLASS)", "39.24x-76.363")],
+        show=True,
         )

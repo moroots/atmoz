@@ -45,8 +45,7 @@ def tolnet_ozone():
         ]
     
     cmap = mpl.colors.ListedColormap(ncolors)
-    cmap.set_under([1, 1, 1])
-    cmap.set_over([0, 0, 0])
+    cmap = cmap.with_extremes(under=[1, 1, 1], over=[0, 0, 0])
     bounds = [0.001, *np.arange(5, 121, 5), 150, 200, 300, 600]
     norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
     return cmap, norm

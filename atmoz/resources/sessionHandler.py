@@ -78,7 +78,9 @@ class SessionHandler:
         max_retries: int = 3,
         backoff_factor: float = 0.5,
         timeout: float | tuple | None = 10.0,
+        user_agent: str | None = None,
     ):
+        self.user_agent = user_agent
         self.pool_connections = pool_connections
         self.pool_maxsize = pool_maxsize
         self.max_retries = max_retries
@@ -127,6 +129,8 @@ class SessionHandler:
             )
 
             sess = requests.Session()
+            if self.user_agent:
+                sess.headers["User-Agent"] = self.user_agent
             sess.mount("http://", adapter)
             sess.mount("https://", adapter)
 

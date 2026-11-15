@@ -193,7 +193,7 @@ def sonde_XYC(df, key):
 def vertical_profile(profiles: Dict,  
                      plot_params: Dict = {}, 
                      theme: Dict = {},
-                     show=True
+                     show=False
                      ):
 
     theme = useful_functions.merge_dicts(vertical_profile_theme, theme)
@@ -220,9 +220,9 @@ def vertical_profile(profiles: Dict,
 
         plot_utilities.apply_plot_params(fig, ax, **plot_params)
 
-        if show == True: 
+        if show:
             plt.show()
-    return 
+    return fig, ax
 
 def plot_curtain(lidar, sonde=None, **kwargs):
     tz = kwargs.pop("tz", "UTC")
@@ -265,8 +265,7 @@ def plot_curtain(lidar, sonde=None, **kwargs):
         
         plot_utilities.apply_plot_params(fig, ax, **params)
 
-        plt.close()
-    return 
+    return fig, ax
 
 from windrose import WindroseAxes
 import matplotlib.pyplot as plt
@@ -300,7 +299,7 @@ def plot_wind_rose(wind_direction, wind_speed, bar_params={}, plot_params={}):
     ax.yaxis.set_major_formatter(mtick.PercentFormatter())
     plot_utilities.apply_plot_params(fig, ax, **plot_params)
 
-    return
+    return fig, ax
     
 def site_map(instruments: Dict, 
              title: str = "Site Map", 
@@ -359,7 +358,6 @@ def site_map(instruments: Dict,
         showlegend=True
         )
     
-    fig.show()
-    return 
+    return fig
 
 

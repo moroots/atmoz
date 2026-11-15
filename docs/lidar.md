@@ -378,32 +378,51 @@ print(tolnet.processing_types)
 ## UCN: Unified Ceilometer Network
 
 The [Unified Ceilometer Network](https://ucn.cas.hamptonu.edu/viewer/) (Hampton University) publishes one NetCDF file per
-ceilometer per UTC day, in three levels:
+ceilometer per UTC day. atmoz reads two levels (the raw 16 s `L0b` profiles are ~33 MB a day and are not supported yet):
 
-| Level | Contents |
-|-------|----------|
-| `L0b` (default) | Standardized attenuated backscatter (`bsc_prof`, `time` x `altitude`, 10 s x 10 m up to 15.4 km) and instrument housekeeping. |
-| `L2` | 10-minute boundary-layer and cloud retrievals: `nsl_ml_height`, `rl_height`, `cloud_layers`, quality flags. |
-| `L3` | Hourly boundary-layer statistics. |
+| Level | Contents | Size per day |
+|-------|----------|--------------|
+| `L2` (default) | 10-minute attenuated backscatter profile (1540 heights, 10 m apart) + boundary-layer, cloud and QC retrievals | ~1.4 MB download, ~0.75 MB cached |
+| `L3` | hourly boundary-layer statistics (UCN's own coverage rules) | ~1.3 MB download, ~11 KB cached |
+
+An L3 file repeats L2's backscatter array exactly (checked on one day), so atmoz keeps only L3's hourly table.
 
 ```python
 from atmoz.lidar import UCN
 
-UCN.sites()                                     # ceilometer numbers and site names
+UCN.sites()                                       # ceilometer numbers and site names
+UCN.available(9, "2026-10-01", "2026-10-31")      # what a request would fetch (and its size), no data downloaded
 
-ds = UCN.download(9, "2026-11-14")              # McMillan Reservoir, DC; always an atmoz_dataset
-x = ds.data["CEILO-9_20261114_L0b.nc"]          # an xarray.Dataset with `time` and `altitude` coordinates
-x["bsc_prof"].plot(x="time", y="altitude")
+ds = UCN.download(9, "2026-11-01")                # McMillan Reservoir, DC; always an atmoz_dataset
+df = ds.data["CEILO-9_20261101_L2"]               # a DataFrame: one row per 10 minutes, indexed by UTC time
+df["nsl_ml_height"]                               # an ordinary column
+df["attenuated_backscatter"].iloc[0]              # a profile: one numpy array (1540 heights) per row
+df.attrs["altitude_m"]                            # heights, list labels, units, file attributes
 
-# Several days and levels; leave out days that have no file instead of failing
-ds = UCN.download([9, 4], "2026-11-01", "2026-11-07", level=["L0b", "L2"], skip_missing=True)
-ds.metadata["missing"]                          # the files that did not exist
+month = UCN.download(9, "2026-10-01", "2026-10-31", skip_missing=True)
+both = UCN.stack(month, 9)                        # all days joined into one DataFrame
+UCN.backscatter(both).plot(x="time")              # (time x altitude) xarray DataArray for plotting
 
-paths = UCN.fetch(9, "2026-11-01", level="L3")  # {name: Path}: only put the files on disk
+UCN.download(9, "2026-11-01", level="L3")         # hourly statistics instead
+UCN.fetch(9, "2026-11-01")                        # {name: parquet path}: only put the files on disk
 ```
 
-* Dates are UTC days and both ends are inclusive. Files are cached in `~/.atmoz/cache/ucn`; the newest two days are
-  re-downloaded hourly (they are still being written) and older days are treated as final. `refresh=True` forces a download.
-* The server answers a missing L0b day with an ordinary page and a missing L2/L3 day with a 404. Both are treated the same:
-  `DownloadError` by default (all-or-nothing), or skipped with `skip_missing=True`. A missing day is never cached.
-* Variable names are left as published. L2 and L3 appear a day or more after L0b.
+**Choosing data.** Ceilometer number(s), UTC day range (inclusive), `level`, and `skip_missing`. Everything else (time of day,
+height range) is a slice of the DataFrame or the array from `UCN.backscatter()`. There is no selection by state or bounding box yet:
+the ceilometer list carries no coordinates.
+
+**Gentle on the server, by design**
+
+* Files are downloaded **once**, then served from the cache. Days older than two are final; the newest two are re-checked hourly.
+* 2 workers by default, a pause (`pause=0.5` s) between request starts, retries with backoff, and an `atmoz/<version>` User-Agent.
+* `skip_missing=True` uses the viewer's list of available days, so days it does not list are never requested.
+* A request of more than about 1 GB to download (about 700 L2 days) or 2 GB in memory (about 1,700 L2 days, ~1.2 MB each) raises `RequestTooLargeError` before anything is
+  downloaded. Preview it with `UCN.available(...)`, split it up, or pass `allow_large=True`.
+
+**The cache** (`~/.atmoz/cache/ucn`) holds one parquet file per ceilometer-day, not the NetCDF: about half the size for L2.
+Profile variables are list columns, and heights, labels, units and attributes are stored in the file's metadata.
+`fetch()` therefore returns parquet paths; `pandas.read_parquet` reads them.
+
+**Missing days.** UCN answers a missing day with a 404 (or an ordinary page). By default that raises `DownloadError`
+(all-or-nothing); with `skip_missing=True` those days are left out and listed in `ds.metadata["missing"]`. A missing day is never cached.
+L2 and L3 appear a day or more after the data is recorded.

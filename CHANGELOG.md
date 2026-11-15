@@ -4,6 +4,30 @@ All notable changes to atmoz are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/) (while below 1.0, minor versions may change APIs).
 
+## [Unreleased]
+
+### Added
+- `atmoz.plot` / `atmoz.plotting`: opinionated plots with one entry point. `az.plot("curtain", df)` and
+  `az.plot.curtain(df)` are the same call; `curtain`, `profile`, `windrose` (windrose) and `site_map` (plotly) so far.
+  Matplotlib plots return `(fig, ax)`; plotly plots return the `Figure`. Unknown names suggest the closest match.
+- `atmoz.plotting.styles`: immutable `Style` objects (rcParams, colour-blind-safe colour cycle, figure size, artist
+  params, plotly layout). Pass `style=` (object, name, dict, or `None`) and `figsize=` to any plot. Style is applied per
+  call with `rc_context`, never to the global matplotlib settings.
+- Ships Inter (SIL Open Font License, license included) in `atmoz/assets/fonts/`, registered automatically; DejaVu Sans fallback.
+- `plots` extra (plotly, windrose, geopandas, shapely).
+
+### Changed
+- `TOLNET.plot_curtain`, `makePlots.vertical_profile`, `plot_curtain`, `plot_wind_rose` now return `(fig, ax)` and no
+  longer call `plt.show()`/`plt.close()`; pass `show=True` to `TOLNET.plot_curtain` for the old behaviour in scripts.
+  `makePlots.site_map` returns the plotly figure instead of showing it.
+- Curtain theme: DejaVu/Inter-style fonts instead of `Courier New`, figure 11 x 4.4 in instead of 20 x 6, smaller labels.
+
+### Fixed
+- `merge_dicts` shared nested dicts with the module defaults, so `TOLNET.plot_curtain` lost its colorbar label and ticks
+  after the first call. It now deep-copies, and `apply_plot_params` no longer mutates its input.
+- `makePlots.site_map` raised `TypeError` (`*params["map"]` instead of `**params["map"]`).
+- `colorbars.tolnet_ozone` no longer uses the deprecated `set_under` / `set_over`.
+
 ## [0.1.0] - 2026-11-12
 
 First tagged release.
@@ -16,11 +40,14 @@ First tagged release.
 - `atmoz.resources.urls`: one `build_url` / `redact` used by every data source.
 - `EPA_PreGen.fetch()` and `read_aqs_zip()` for downloading and parsing separately; `columns=` and `bbox=` options to load less.
 - `chunk=` option on `AirNowAPI.download` / `fetch` to choose the request window size.
-- Typed exceptions: `DownloadError`, `APIError`, `MissingCredentialError`, `NoDataError`.
-- `atmoz.lidar.UCN`: Unified Ceilometer Network (Hampton University) files, levels L0b / L2 / L3, one per ceilometer per UTC day.
-  `UCN.download()` returns an `atmoz_dataset` of `xarray.Dataset`s (common `time` / `altitude` coordinates), `UCN.fetch()` the cached
-  NetCDF paths, `UCN.sites()` the ceilometer list. Days with no file raise, or are skipped with `skip_missing=True`.
-  The `lidar` extra now includes `xarray` and `netcdf4`.
+- Typed exceptions: `DownloadError`, `APIError`, `MissingCredentialError`, `NoDataError`, `RequestTooLargeError`.
+- `atmoz.lidar.UCN`: Unified Ceilometer Network (Hampton University) data, levels L2 (default) and L3, one file per
+  ceilometer per UTC day. `UCN.download()` returns an `atmoz_dataset` of DataFrames (one row per time step, profile variables
+  as list columns), `UCN.fetch()` the cached parquet paths, `UCN.available()` a size preview, `UCN.sites()` the ceilometer list,
+  `UCN.stack()` / `UCN.backscatter()` helpers. The cache keeps one compact parquet file per day (about half the NetCDF size).
+  Gentle on the server (2 workers, request pacing, `atmoz/<version>` User-Agent, never re-downloads final days) and bounded:
+  requests over ~1 GB raise `RequestTooLargeError` unless `allow_large=True`. L0b is not supported yet.
+- `SessionHandler(user_agent=...)`; the shared session now identifies itself as `atmoz/<version>`.
 - Test suite (offline) and GitLab CI (Python 3.11-3.13, lint, wheel check); `py.typed`; project metadata and classifiers.
 - Optional dependency groups: `surface`, `lidar`, `models`, `nasa`, `legacy`, `all`, `dev`.
 
