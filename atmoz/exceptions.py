@@ -32,6 +32,13 @@ class DownloadError(AtmozError, RuntimeError):
         self.failed = failed or []
 
 
+class NoDataError(AtmozError, LookupError):
+    """The source answered normally but has no data for the request (e.g. no file for that day).
+
+    Distinct from :class:`DownloadError` (something *failed*): here nothing is wrong, the data just isn't there.
+    """
+
+
 class APIError(AtmozError):
     """A web API answered with an error (or could not be reached).
 

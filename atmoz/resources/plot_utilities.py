@@ -103,6 +103,7 @@ def apply_plot_params(fig, ax, **params):
             continue
         if target is not None: 
             if isinstance(kwargs, dict) and "sub_functions" in kwargs.keys(): 
+                kwargs = dict(kwargs)   # work on a copy so the caller's params keep their sub_functions
                 sub_functions = kwargs.pop("sub_functions", {})
                 result = __call_attr(target, kwargs)
                 for sub_func_name, sub_func_kwargs in sub_functions.items():

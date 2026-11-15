@@ -376,7 +376,7 @@ class TOLNET:
         df.sort_index(inplace=True)
         return df
 
-    def import_data(self, min_date: str, max_date: str, **kwargs):
+    def download(self, min_date: str, max_date: str, **kwargs):
         """
         Download TOLNet JSON data into memory and store in self.data.
 
@@ -461,14 +461,14 @@ class TOLNET:
             )
         if not self.data and not self.files.empty:
             warnings.warn(
-                "import_data completed but self.data is empty — "
+                "download completed but self.data is empty — "
                 "all files may have failed. Check self._errors.",
                 stacklevel=2,
             )
 
         return self
 
-    def _download(self, file_id: Union[int, str], url_path: str):
+    def _fetch_one(self, file_id: Union[int, str], url_path: str):
         url = build_url(self.base_url, *url_path.strip("/").split("/"), file_id)
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
@@ -476,7 +476,7 @@ class TOLNET:
         print(f"Failed to download file {file_id}. Status code: {response.status_code}")
         return file_id, None
 
-    def download(self, dest_dir: str, file_type: str = "json", threaded: bool = True, max_workers: int = 8, **params):
+    def fetch(self, dest_dir: str, file_type: str = "json", threaded: bool = True, max_workers: int = 8, **params):
         """
         Query the file list and download matching files to dest_dir.
 
@@ -498,11 +498,11 @@ class TOLNET:
             print("No files found for the given query parameters.")
             return []
         if threaded:
-            return self.download_files_threaded(files_list, dest_dir, file_type=file_type, max_workers=max_workers)
+            return self._fetch_files_threaded(files_list, dest_dir, file_type=file_type, max_workers=max_workers)
         else:
-            return self.download_files(files_list, dest_dir, file_type=file_type)
+            return self._fetch_files(files_list, dest_dir, file_type=file_type)
 
-    def download_files(self, files_list: pd.DataFrame, dest_dir: str, file_type: str = "json"):
+    def _fetch_files(self, files_list: pd.DataFrame, dest_dir: str, file_type: str = "json"):
         """Sequential authenticated download of TOLNet files to disk."""
         dest_dir = Path(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -528,7 +528,7 @@ class TOLNET:
             else:
                 print(f"[{idx}/{len(files_list)}] Downloaded {file_id}")
 
-    def download_files_threaded(
+    def _fetch_files_threaded(
         self,
         files_list: pd.DataFrame,
         dest_dir: str,
@@ -546,7 +546,7 @@ class TOLNET:
                 _local.session = EarthData().auth.get_session()
             return _local.session
 
-        def download_one(file_id):
+        def _fetch_file(file_id):
             if file_type == "json":
                 url = build_url(self.base_url, "data", "json", file_id)
                 ext = "json"
@@ -566,7 +566,7 @@ class TOLNET:
 
         results = []
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(download_one, fid): fid for fid in files_list.id}
+            futures = {executor.submit(_fetch_file, fid): fid for fid in files_list.id}
             for future in as_completed(futures):
                 fid, success, error = future.result()
                 if success:
@@ -677,7 +677,7 @@ if __name__ == "__main__":
     date_start = "2025-07-28"
     date_end = "2025-08-01"
 
-    tolnet.import_data(
+    tolnet.download(
         min_date=date_start,
         max_date=date_end,
         product_type=[4],

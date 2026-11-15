@@ -1,0 +1,53 @@
+# Tests on every supported Python, lint, and a packaging smoke test.
+# Tests never touch the network (HTTP is faked), so this is fast and deterministic.
+name: CI
+
+on:
+  push:
+    branches: [main, dev, prod]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13", cache: pip }
+      - run: pip install -e ".[dev]"
+      - run: ruff check atmoz tests
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python-version }}", cache: pip }
+      - run: pip install -e ".[surface,lidar,models,nasa,dev]"
+      - run: pytest --cov=atmoz --cov-report=term
+
+  core-install:
+    # The core install (no extras) must import and run the surface downloaders.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/test_package.py tests/test_aqs.py tests/test_airnow.py tests/test_cache.py tests/test_credentials.py tests/test_urls.py tests/test_units.py tests/test_ucn.py
+
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - run: pip install build
+      - run: python -m build
+      - run: python tools/check_wheel.py
+      - uses: actions/upload-artifact@v4
+        with: { name: dist, path: dist/, retention-days: 7 }

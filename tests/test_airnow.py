@@ -4,8 +4,14 @@ import pytest
 
 from conftest import FakeResponse
 from atmoz.exceptions import APIError, DownloadError, MissingCredentialError
-from atmoz.surface import AirNow
-from atmoz.surface.AirNow import AirNowParams, make_windows
+from atmoz.surface import AirNow, AirNowAPI
+from atmoz.surface.AirNow_API import AirNowParams, make_windows
+
+
+def dl(h, key, *args, **kw):
+    """AirNowAPI.download with a fake HTTP layer."""
+    return AirNowAPI.download(*args, api_key=key, session_handler=h, **kw)
+
 
 KEY = "SECRET-KEY-12345"
 
@@ -55,20 +61,21 @@ def test_params_normalise_bbox_keeping_precision_and_sign():
 
 
 def test_build_url_hides_key_unless_given():
-    a = AirNow(api_key=KEY)
-    assert KEY not in a._build_url(startDate="2020-01-01T00", endDate="2020-01-01T23")
-    assert KEY in a._build_url(api_key=KEY, startDate="2020-01-01T00", endDate="2020-01-01T23")
+    a = AirNowAPI(api_key=KEY)
+    job = {"startDate": "2020-01-01T00", "endDate": "2020-01-01T23"}
+    assert KEY not in a._url(job)
+    assert KEY in a._url(job, with_key=True)
     assert KEY not in repr(a)
 
 
 def test_missing_key_raises_and_never_prompts():
     with pytest.raises(MissingCredentialError):
-        AirNow().api_key
+        AirNowAPI().api_key
 
 
 def test_key_found_in_env_file():
     AirNow.set_api_key(KEY)
-    assert AirNow().api_key == KEY
+    assert AirNowAPI().api_key == KEY
 
 
 def test_connection_error_message_does_not_leak_key(fake_http):
@@ -77,9 +84,9 @@ def test_connection_error_message_does_not_leak_key(fake_http):
     def boom(url, **kw):
         raise requests.ConnectionError(f"HTTPSConnectionPool: Max retries exceeded with url: {url}")
 
-    a = AirNow(api_key=KEY, session_handler=fake_http(boom))
+    a = AirNowAPI(api_key=KEY, session_handler=fake_http(boom))
     with pytest.raises(APIError) as err:
-        a._pull(startDate="2020-01-01T00", endDate="2020-01-01T23")
+        a._fetch_one({"startDate": "2020-01-01T00", "endDate": "2020-01-01T23"})
     assert KEY not in str(err.value)
     assert err.value.__suppress_context__  # original exception (which has the key) is not chained into tracebacks
 
@@ -87,19 +94,19 @@ def test_connection_error_message_does_not_leak_key(fake_http):
 def test_http_error_body_is_redacted(fake_http):
     h = fake_http(lambda url, **kw: FakeResponse(403, text=f"bad key {KEY}"))
     with pytest.raises(APIError) as err:
-        AirNow(api_key=KEY, session_handler=h)._pull()
+        AirNowAPI(api_key=KEY, session_handler=h)._fetch_one({})
     assert KEY not in str(err.value) and err.value.status_code == 403
 
 
 # ---- fetching ----------------------------------------------------------------------------------
 
-def test_import_data_one_request_per_day_in_order(fake_http):
+def test_download_one_request_per_day_in_order(fake_http):
     def handler(url, **kw):
         day = "2020-01-0" + url.split("startDate=2020-01-0")[1][0]
         return FakeResponse(200, json_data=[obs(f"{day}T00:00")])
 
     h = fake_http(handler)
-    ds = AirNow(api_key=KEY, session_handler=h).import_data("2020-01-01", "2020-01-03", silent=True, use_cache=False)
+    ds = dl(h, KEY, "2020-01-01", "2020-01-03", silent=True, use_cache=False)
     assert len(h.calls) == 3
     assert all("startDate=2020-01-0" in c[0] and KEY in c[0] for c in h.calls)
     assert ds.data["UTC"].tolist() == ["2020-01-01T00:00", "2020-01-02T00:00", "2020-01-03T00:00"]
@@ -107,7 +114,7 @@ def test_import_data_one_request_per_day_in_order(fake_http):
 
 def test_same_day_range_works(fake_http):
     h = fake_http(lambda url, **kw: FakeResponse(200, json_data=[obs()]))
-    AirNow(api_key=KEY, session_handler=h).import_data("2020-01-01", "2020-01-01", silent=True, use_cache=False)
+    dl(h, KEY, "2020-01-01", "2020-01-01", silent=True, use_cache=False)
     assert len(h.calls) == 1
 
 
@@ -115,48 +122,48 @@ def test_failure_is_all_or_nothing_and_redacted(fake_http):
     def handler(url, **kw):
         return FakeResponse(500, text=f"oops {KEY}") if "startDate=2020-01-02" in url else FakeResponse(200, json_data=[obs()])
 
-    a = AirNow(api_key=KEY, session_handler=fake_http(handler))
+    h = fake_http(handler)
     with pytest.raises(DownloadError) as err:
-        a.import_data("2020-01-01", "2020-01-03", silent=True, use_cache=False)
+        dl(h, KEY, "2020-01-01", "2020-01-03", silent=True, use_cache=False)
     assert KEY not in str(err.value) and "2020-01-02" in str(err.value) and len(err.value.failed) == 1
 
 
 def test_json_error_object_with_http_200_is_an_error(fake_http):
     h = fake_http(lambda url, **kw: FakeResponse(200, json_data={"WebServiceError": [{"Message": "bad"}]}))
     with pytest.raises(DownloadError):
-        AirNow(api_key=KEY, session_handler=h).import_data("2020-01-01", "2020-01-01", silent=True, use_cache=False)
+        dl(h, KEY, "2020-01-01", "2020-01-01", silent=True, use_cache=False)
 
 
 def test_settled_windows_are_cached_recent_ones_are_not(fake_http):
     h = fake_http(lambda url, **kw: FakeResponse(200, json_data=[obs()]))
-    a = AirNow(api_key=KEY, session_handler=h)
-    a.import_data("2020-01-01", "2020-01-02", silent=True)
+    dl(h, KEY, "2020-01-01", "2020-01-02", silent=True)
     n = len(h.calls)
-    a.import_data("2020-01-01", "2020-01-02", silent=True)
+    dl(h, KEY, "2020-01-01", "2020-01-02", silent=True)
     assert len(h.calls) == n  # served from the file cache
-    a.import_data("2020-01-01", "2020-01-02", silent=True, refresh=True)
+    dl(h, KEY, "2020-01-01", "2020-01-02", silent=True, refresh=True)
     assert len(h.calls) == 2 * n
 
     today = datetime.now().strftime("%Y-%m-%d")
     before = len(h.calls)
-    a.import_data(today, today, silent=True)
-    a.import_data(today, today, silent=True)
+    dl(h, KEY, today, today, silent=True)
+    dl(h, KEY, today, today, silent=True)
     assert len(h.calls) == before + 2  # recent data may still change: never cached
 
 
 def test_cache_key_ignores_api_key_but_not_the_query(fake_http):
     h = fake_http(lambda url, **kw: FakeResponse(200, json_data=[obs()]))
-    AirNow(api_key="one", session_handler=h).import_data("2020-01-01", "2020-01-01", silent=True)
-    AirNow(api_key="two", session_handler=h).import_data("2020-01-01", "2020-01-01", silent=True)
+    dl(h, "one", "2020-01-01", "2020-01-01", silent=True)
+    dl(h, "two", "2020-01-01", "2020-01-01", silent=True)
     assert len(h.calls) == 1
-    AirNow(api_key="two", session_handler=h).import_data("2020-01-01", "2020-01-01", silent=True, parameters=["PM25"])
+    dl(h, "two", "2020-01-01", "2020-01-01", silent=True, parameters=["PM25"])
     assert len(h.calls) == 2
 
 
-def test_download_data_writes_parquet_without_the_key(fake_http, tmp_path):
+def test_fetch_writes_parquet_without_the_key(fake_http, tmp_path):
     import pandas as pd
     h = fake_http(lambda url, **kw: FakeResponse(200, json_data=[obs()]))
-    path = AirNow(api_key=KEY, session_handler=h).download_data("2020-01-01", "2020-01-02", output_dir=tmp_path, silent=True)
+    files = AirNowAPI.fetch("2020-01-01", "2020-01-02", output_dir=tmp_path, silent=True, api_key=KEY, session_handler=h)
+    (path,) = files.values()
     assert path.exists() and ":" not in path.name
     assert len(pd.read_parquet(path)) == 1  # identical rows from both days are de-duplicated
     assert KEY not in path.read_bytes().decode("latin-1")
@@ -164,4 +171,4 @@ def test_download_data_writes_parquet_without_the_key(fake_http, tmp_path):
 
 def test_half_specified_range_is_rejected():
     with pytest.raises(ValueError):
-        AirNow(api_key=KEY).import_data(start_date="2020-01-01")
+        AirNowAPI.download(start_date="2020-01-01", api_key=KEY)

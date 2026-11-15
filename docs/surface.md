@@ -3,7 +3,7 @@
 EPA air-quality data: bulk pre-generated AQS files and the live AirNow API.
 
 ```python
-from atmoz.surface import AirNow, epa_pregen, read_aqs_zip   # core install is enough
+from atmoz.surface import AirNow, AirNowAPI, EPA_PreGen, read_aqs_zip   # core install is enough
 from atmoz.surface import utilities as su                    # needs: pip install "atmoz[surface]"
 ```
 
@@ -15,12 +15,13 @@ from atmoz.surface import utilities as su                    # needs: pip instal
 from atmoz.surface import AirNow
 
 # National hourly ozone for 2025 -> {"hourly_44201_2025.csv": DataFrame}
-data = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025)
+ds = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025)
+data = ds.data  # {filename: DataFrame}
 df = data["hourly_44201_2025.csv"]
 
 # Live AirNow API (needs a free key, saved once, see "API key" below)
 AirNow.set_api_key()                      # prompts, then stores it for every future session
-ds = AirNow().import_data("2025-08-01", "2025-08-07", parameters=["OZONE", "PM25"])
+ds = AirNow.download(endpoint="airnow", start_date="2025-08-01", end_date="2025-08-07", parameters=["OZONE", "PM25"])
 ds.data, ds.metadata
 ```
 
@@ -38,10 +39,10 @@ AirNow.download(endpoint="aqs" | "airnow", **kwargs)
 
 | `endpoint` | Backend | Returns | Use when |
 |------------|---------|---------|----------|
-| `"aqs"` | `epa_pregen._download()` | `{filename: DataFrame}` | Historical bulk files for whole years |
-| `"airnow"` (default) | `AirNow().import_data()` | `atmoz_dataset` | Recent / near-real-time observations from the live API |
+| `"aqs"` | `EPA_PreGen.download()` | `atmoz_dataset`; `.data` is `{filename: DataFrame}` | Historical bulk files for whole years |
+| `"airnow"` (default) | `AirNowAPI.download()` | `atmoz_dataset`; `.data` is one DataFrame | Recent / near-real-time observations from the live API |
 
-> The two endpoints currently return different types. Unifying them is planned before the API is frozen.
+Both endpoints return an `atmoz_dataset` (`datatype="surface"`). `.metadata` records which backend produced it.
 
 ### `endpoint="aqs"` kwargs
 
@@ -64,7 +65,7 @@ AirNow.download(endpoint="aqs" | "airnow", **kwargs)
 
 ```python
 # Several parameters / resolutions / years in one call (every valid combination)
-data = AirNow.download(
+ds = AirNow.download(
     endpoint="aqs",
     parameters=["ozone", "pm25", "no2"],
     resolutions=["hourly", "daily"],
@@ -72,23 +73,23 @@ data = AirNow.download(
 )
 ```
 
-**Do it your way.** `epa_pregen.fetch(...)` only downloads (and caches) the zips and returns their paths, and
+**Do it your way.** `EPA_PreGen.fetch(...)` (or `AirNow.fetch(endpoint="aqs", ...)`) only downloads (and caches) the zips and returns their paths, and
 `read_aqs_zip(path, columns=..., bbox=...)` parses one zip, so you can mix and match or bring your own parser:
 
 ```python
-from atmoz.surface import epa_pregen, read_aqs_zip
-paths = epa_pregen.fetch("ozone", "hourly", [2023, 2024])     # {"hourly_44201_2023.csv": Path(...zip), ...}
+from atmoz.surface import EPA_PreGen, read_aqs_zip
+paths = EPA_PreGen.fetch("ozone", "hourly", [2023, 2024])     # {"hourly_44201_2023.csv": Path(...zip), ...}
 df = read_aqs_zip(paths["hourly_44201_2024.csv"], columns=["Latitude", "Longitude", "Date GMT", "Time GMT", "Sample Measurement"])
 ```
 
 ### `endpoint="airnow"` kwargs
 
-Forwarded to `AirNow(api_key=...).import_data()`; see [`import_data`](#import_datastart_date-end_date-kwargs).
+Forwarded to `AirNowAPI.download()`; see [`download`](#downloadstart_date-end_date-kwargs).
 `api_key=` may be passed here too.
 
 ---
 
-## `epa_pregen` — EPA Pre-Generated Bulk Files
+## `EPA_PreGen` — EPA Pre-Generated Bulk Files (`atmoz/surface/AQS.py`)
 
 Downloads annual ZIP files from `https://aqs.epa.gov/aqsweb/airdata/`. Each ZIP holds one CSV with every US
 monitoring site for that parameter / resolution / year.
@@ -104,7 +105,7 @@ How it stays fast and light:
 
 ### EPA Parameters
 
-The table below is `EPA_PARAMETERS` in `atmoz/surface/AirNow.py`. Combinations marked empty are skipped with a
+The table below is `EPA_PARAMETERS` in `atmoz/surface/AQS.py`. Combinations marked empty are skipped with a
 warning. It has not been re-verified against EPA's current file list; you can always pass an AQS code directly.
 
 | Name | Code | hourly | daily | 8hour | annual |
@@ -148,7 +149,7 @@ Column sets differ between hourly, daily and annual files; every column in the f
 
 ---
 
-## `AirNow` — Live AirNow API
+## `AirNowAPI` — Live AirNow API (`atmoz/surface/AirNow_API.py`)
 
 Fetches current and recent observations from the AirNow API. Requires a free key from
 [docs.airnowapi.org](https://docs.airnowapi.org/).
@@ -157,7 +158,7 @@ Fetches current and recent observations from the AirNow API. Requires a free key
 
 The key is looked up in this order, and **never prompted for** (so scripts, CI and notebooks never hang):
 
-1. `AirNow(api_key="...")`
+1. `AirNow.download(api_key="...")` / `AirNowAPI(api_key="...")`
 2. the `ATMOZ_AIRNOW_API_KEY` environment variable
 3. the nearest `.atmoz.env` file, walking up from the current directory
 4. `~/.atmoz/.atmoz.env`
@@ -173,10 +174,10 @@ If none is found, `MissingCredentialError` explains how to set it. The key is ne
 reprs or the saved Parquet metadata. See [Configuration](configuration.md) for details and the
 one limitation (DEBUG-level logging from `urllib3`).
 
-### `import_data(start_date, end_date, **kwargs)`
+### `download(start_date, end_date, **kwargs)`
 
 ```python
-dataset = AirNow().import_data(
+dataset = AirNowAPI.download(
     start_date="2025-08-01",
     end_date="2025-08-07",                      # a bare date means "through 23:00 UTC that day"
     parameters=["OZONE", "PM25"],
@@ -192,7 +193,7 @@ print(dataset.metadata)   # pd.DataFrame, one row per monitoring station
 * Windows run on a thread pool (`max_workers=3`), with retries and timeouts from the shared session pool.
 * Windows never overlap, and `start_date == end_date` returns that single day.
 * All-or-nothing: any failure raises `DownloadError` listing the failed windows.
-* Windows that ended more than `AirNow.settle_hours` (72) ago are cached; recent windows are always re-fetched
+* Windows that ended more than `AirNowAPI.settle_hours` (72) ago are cached; recent windows are always re-fetched
   because AirNow can still revise them. `use_cache=False` / `refresh=True` override.
 
 | Argument | Default | Description |
@@ -201,6 +202,7 @@ print(dataset.metadata)   # pd.DataFrame, one row per monitoring station
 | `max_workers` | `3` | Concurrent requests. |
 | `chunk` | `"1D"` | Request window size. |
 | `use_cache`, `refresh` | `True`, `False` | File-cache controls. |
+| `api_key` | env / `.atmoz.env` | See *API key* above. |
 | `silent` | `False` | Hide the progress bar. |
 | `parameters` | all 6 | `["OZONE", "PM25", "PM10", "CO", "NO2", "SO2"]` |
 | `BBOX` | East US | `[minLon, minLat, maxLon, maxLat]`; numbers or strings, precision and sign preserved. |
@@ -210,15 +212,15 @@ print(dataset.metadata)   # pd.DataFrame, one row per monitoring station
 | `includerawconcentrations` | `"1"` | Include raw values. |
 
 > **To verify with a real key:** the window logic assumes AirNow returns the `endDate` hour (inclusive), so windows
-> end one hour before the next begins. If that is wrong, set `AirNow.window_end_inclusive = False`.
+> end one hour before the next begins. If that is wrong, set `AirNowAPI.window_end_inclusive = False`.
 > A final de-duplication makes either setting safe from double-counting.
 
-### `download_data(start_date, end_date, output_dir, max_workers, **kwargs)`
+### `fetch(start_date, end_date, output_dir, **kwargs)`
 
-Same arguments as `import_data`, but saves one Parquet file and returns its `Path`.
+Same arguments as `download`, but saves one Parquet file and returns `{filename: Path}`.
 
 ```python
-path = AirNow().download_data("2025-08-01", "2025-08-31", output_dir="./data")
+files = AirNowAPI.fetch("2025-08-01", "2025-08-31", output_dir="./data")
 # -> ./data/airnow_api_query_2025-08-01T00_2025-08-31T23.parquet   (query in df.attrs["query_params"])
 ```
 
@@ -392,8 +394,8 @@ from atmoz.surface import AirNow
 from atmoz.surface import utilities as su   # needs: pip install "atmoz[surface]"
 
 # Download
-data = AirNow.download(endpoint="aqs", parameters=["ozone"], resolutions=["hourly"], years=[2025])
-df = data["hourly_44201_2025.csv"]
+ds = AirNow.download(endpoint="aqs", parameters=["ozone"], resolutions=["hourly"], years=[2025])
+df = ds.data["hourly_44201_2025.csv"]
 
 # Latitude / Longitude already arrive as float64, so there is nothing to convert.
 meta = su.extract_metadata(df)
@@ -408,7 +410,7 @@ by_site = su.split_by_station(df_roi)
 To avoid ever loading the whole country, filter while reading instead:
 
 ```python
-data = AirNow.download(
+ds = AirNow.download(
     endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025,
     bbox=(-77.5, 38.5, -76.5, 39.5),          # (min_lon, min_lat, max_lon, max_lat)
 )

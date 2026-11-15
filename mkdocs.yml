@@ -11,6 +11,7 @@ nav:
   - Installation: installation.md
   - Configuration: configuration.md
   - Caching: caching.md
+  - Conventions: conventions.md
   - Surface (AirNow / EPA AQS): surface.md
-  - Lidar (TOLNet): lidar.md
+  - Lidar (TOLNet, UCN): lidar.md
   - Models (GEOS-CF): models.md

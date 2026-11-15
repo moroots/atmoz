@@ -164,8 +164,9 @@ geos.fetch(
 | `collection` | `str` | `"aqc"` | `"aqc"`, `"chm"`, or `"met"` |
 | `mode` | `str` | `"assim"` | `"assim"` (historical) or `"fcast"` (forecast) |
 | `variables` | `List[str]` | collection defaults | Variable name(s) to retrieve (lowercase). Pass `None` for all. |
-| `cache_dir` | `str` | `None` | Path to local cache directory. If set, data is read from cache on repeat calls. (Moving this onto the shared atmoz cache is planned for 0.1.1.) |
-| `force_download` | `bool` | `False` | Re-download even if a valid cache file exists. |
+| `cache_dir` | `str` | `None` | Cache directory. Default: the shared atmoz cache, `atmoz.cache_dir("geos_cf")`. |
+| `use_cache` | `bool` | `True` | `False` neither reads nor writes the cache. Forecast (`mode="fcast"`) results are cached only if you pass `cache_dir`. |
+| `force_download` | `bool` | `False` | Re-download and replace the cached file. |
 
 **Returns:** `self` (chainable). Result stored in `self.data[(lat_lon, mode, collection)]`.
 
@@ -182,14 +183,14 @@ Each monthly chunk takes ~90 seconds depending on server load. A full year for o
 
 #### Cache behavior
 
-When `cache_dir` is provided:
+Caching is on by default (historical `mode="assim"`), in the shared atmoz cache (`~/.atmoz/cache/geos_cf`; `atmoz.cache_info()` shows its size, `atmoz.clear_cache("geos_cf")` empties it):
 - First call: downloads from OPeNDAP, saves a NetCDF file to `{cache_dir}/geos_cf_{hash}.nc`
 - Subsequent calls with identical parameters: loads from NetCDF in < 1 second
 - Cache key: MD5 hash of `{snap_lat}x{snap_lon}_{mode}_{collection}_{start}_{end}_{vars}` where lat/lon are snapped to the nearest 0.25° OPeNDAP grid cell — so sites within the same grid cell share one cache file
-- Use `force_download=True` to bypass the cache and re-download
+- `force_download=True` re-downloads and replaces the cached file; `use_cache=False` ignores the cache completely
 
 ```python
-# Recommended pattern for notebooks: always pass cache_dir
+# Optional: keep the cache next to your project instead of ~/.atmoz
 geos.fetch(..., cache_dir=".geos_cf_cache")
 ```
 
@@ -301,7 +302,7 @@ if o3_series.index.tz is None:
 | Full year (12 chunks, 4 workers) | 15–20 minutes |
 | Load from disk cache | < 1 second |
 
-OPeNDAP server response time varies. Avoid re-downloading by always setting `cache_dir` in notebooks. Cache files are plain NetCDF (`.nc`) and can be opened independently with `xr.open_dataset()`.
+OPeNDAP server response time varies. Repeat calls are served from the shared cache automatically. Cache files are plain NetCDF (`.nc`) and can be opened independently with `xr.open_dataset()`.
 
 ---
 
@@ -316,8 +317,8 @@ from atmoz.surface import utilities as su
 from atmoz.models import GEOS_CF
 
 # 1. Download EPA AQS hourly ozone
-data = AirNow.download(endpoint="aqs", parameters=["ozone"], resolutions=["hourly"], years=[2025])
-df = data["hourly_44201_2025.csv"]
+ds = AirNow.download(endpoint="aqs", parameters=["ozone"], resolutions=["hourly"], years=[2025])
+df = ds.data["hourly_44201_2025.csv"]
 df["Latitude"]  = pd.to_numeric(df["Latitude"],  errors="coerce")
 df["Longitude"] = pd.to_numeric(df["Longitude"], errors="coerce")
 

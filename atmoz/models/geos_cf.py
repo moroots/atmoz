@@ -166,6 +166,7 @@ class GEOS_CF:
         variables: Optional[List[str]] = None,
         cache_dir: Optional[str] = None,
         force_download: bool = False,
+        use_cache: bool = True,
     ) -> "GEOS_CF":
         """
         Fetch GEOS-CF data for a single site via OPeNDAP.
@@ -183,10 +184,15 @@ class GEOS_CF:
         variables : list of str, optional
             Variables to fetch (lowercase). Uses collection defaults if None.
         cache_dir : str, optional
-            Directory for local NetCDF cache. Avoids re-downloading on
-            repeated calls with identical parameters.
+            Directory for the local NetCDF cache. Default: the shared atmoz cache
+            (``atmoz.cache_dir("geos_cf")``, i.e. ``~/.atmoz/cache/geos_cf``).
         force_download : bool
-            Ignore cache and re-download even if a cached file exists.
+            Ignore cache and re-download even if a cached file exists (the new
+            download replaces the cached copy).
+        use_cache : bool
+            ``False`` neither reads nor writes the cache. Forecast (``mode="fcast"``)
+            results are only cached when you pass ``cache_dir`` explicitly, because a
+            forecast for a given date is revised as new runs come in.
 
         Returns
         -------
@@ -221,14 +227,18 @@ class GEOS_CF:
         # sites within the same OPeNDAP grid cell share one cache file.
         _snap = lambda v: round(round(v / 0.25) * 0.25, 4)
         cache_path = None
-        if cache_dir is not None:
+        if cache_dir is None and use_cache and query.mode == "assim":
+            from atmoz.resources.cache import cache_dir as _shared_cache
+            cache_dir = _shared_cache("geos_cf")
+        if cache_dir is not None and use_cache:
             cache_key = hashlib.md5(
                 f"{_snap(query.lat)}x{_snap(query.lon)}_{query.mode}_{query.collection}_{query.start_date}_{query.end_date}_{'_'.join(sorted(vars_lower))}".encode()
             ).hexdigest()[:12]
             cache_path = pathlib.Path(cache_dir) / f"geos_cf_{cache_key}.nc"
             if cache_path.exists() and not force_download:
                 print(f"Loading from cache: {cache_path}")
-                ds_loaded = xr.open_dataset(cache_path).load()
+                with xr.open_dataset(cache_path) as _cached:
+                    ds_loaded = _cached.load()
                 self.data[(lat_lon, query.mode, query.collection)] = ds_loaded
                 return self
 
@@ -292,7 +302,9 @@ class GEOS_CF:
 
         if cache_path is not None:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
-            ds_loaded.to_netcdf(cache_path)
+            tmp = cache_path.with_name(cache_path.name + ".part")
+            ds_loaded.to_netcdf(tmp)
+            tmp.replace(cache_path)  # atomic: an interrupted write never looks like a valid cache file
             print(f"Cached to: {cache_path}")
 
         self.data[(lat_lon, query.mode, query.collection)] = ds_loaded

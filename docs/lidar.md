@@ -20,7 +20,7 @@ from atmoz.lidar import TOLNET
 tolnet = TOLNET()
 
 # Download one week of high-resolution ozone profiles
-tolnet.import_data(
+tolnet.download(
     min_date="2025-07-28",
     max_date="2025-08-01",
     product_type=[4],          # HIRES
@@ -39,7 +39,7 @@ tolnet.plot_curtain(tolnet.data[key])
 
 ## `TOLNET_DATA_QUERY` — Query Parameters
 
-All query parameters are validated by a Pydantic model before the request is sent. These same fields are accepted as `**kwargs` by `import_data()`, `_get_files_list()`, and `download()`.
+All query parameters are validated by a Pydantic model before the request is sent. These same fields are accepted as `**kwargs` by `download()`, `_get_files_list()`, and `fetch()`.
 
 ### Filter Fields
 
@@ -89,8 +89,8 @@ Use either a point + radius **or** a bounding box — not both.
 
 No arguments. Initializes the API client with:
 - `self.base_url` = `"https://tolnet.larc.nasa.gov/api"`
-- `self.data` = `{}` — populated by `import_data()`
-- `self.meta_data` = `{}` — populated by `import_data()`
+- `self.data` = `{}` — populated by `download()`
+- `self.meta_data` = `{}` — populated by `download()`
 - `self._errors` = `[]` — failed file IDs with error messages
 
 ---
@@ -142,12 +142,12 @@ Raw OpenAPI YAML schema for the TOLNet API.
 
 ---
 
-### `import_data(min_date, max_date, **kwargs)`
+### `download(min_date, max_date, **kwargs)`
 
 Primary data fetch method. Queries the file list, downloads each matching JSON file in parallel (2 threads), and stores results in `self.data`.
 
 ```python
-tolnet.import_data(
+tolnet.download(
     min_date="2025-07-01",
     max_date="2025-07-31",
     product_type=[4],              # HIRES only
@@ -165,20 +165,20 @@ tolnet.import_data(
 
 **Returns:** `self` (chainable).
 
-After calling `import_data()`:
+After calling `download()`:
 - `tolnet.data` is populated (see [Data Structures](#data-structures))
 - `tolnet.meta_data` is populated with file-level metadata
 - `tolnet._errors` lists any files that failed to download/parse
 
 ---
 
-### `download(dest_dir, file_type, threaded, max_workers, **params)`
+### `fetch(dest_dir, file_type, threaded, max_workers, **params)`
 
 Query the API file list and download matching files to disk.
 
 ```python
 # Download JSON files (lightweight, no EarthData login needed)
-tolnet.download(
+tolnet.fetch(
     dest_dir="./tolnet_data",
     file_type="json",
     min_date="2025-07-01",
@@ -187,7 +187,7 @@ tolnet.download(
 )
 
 # Download HDF GEOMS files (requires NASA EarthData credentials)
-tolnet.download(
+tolnet.fetch(
     dest_dir="./tolnet_hdf",
     file_type="hdf",
     max_workers=4,
@@ -339,7 +339,7 @@ Each metadata dict contains:
 
 ### `tolnet._errors`
 
-List of strings: `"Error processing file {filename}: {exception}"` for any files that failed during `import_data()`.
+List of strings: `"Error processing file {filename}: {exception}"` for any files that failed during `download()`.
 
 ---
 
@@ -372,3 +372,38 @@ print(tolnet.instrument_groups[["name", "city", "state"]])
 print(tolnet.products)
 print(tolnet.processing_types)
 ```
+
+---
+
+## UCN: Unified Ceilometer Network
+
+The [Unified Ceilometer Network](https://ucn.cas.hamptonu.edu/viewer/) (Hampton University) publishes one NetCDF file per
+ceilometer per UTC day, in three levels:
+
+| Level | Contents |
+|-------|----------|
+| `L0b` (default) | Standardized attenuated backscatter (`bsc_prof`, `time` x `altitude`, 10 s x 10 m up to 15.4 km) and instrument housekeeping. |
+| `L2` | 10-minute boundary-layer and cloud retrievals: `nsl_ml_height`, `rl_height`, `cloud_layers`, quality flags. |
+| `L3` | Hourly boundary-layer statistics. |
+
+```python
+from atmoz.lidar import UCN
+
+UCN.sites()                                     # ceilometer numbers and site names
+
+ds = UCN.download(9, "2026-11-14")              # McMillan Reservoir, DC; always an atmoz_dataset
+x = ds.data["CEILO-9_20261114_L0b.nc"]          # an xarray.Dataset with `time` and `altitude` coordinates
+x["bsc_prof"].plot(x="time", y="altitude")
+
+# Several days and levels; leave out days that have no file instead of failing
+ds = UCN.download([9, 4], "2026-11-01", "2026-11-07", level=["L0b", "L2"], skip_missing=True)
+ds.metadata["missing"]                          # the files that did not exist
+
+paths = UCN.fetch(9, "2026-11-01", level="L3")  # {name: Path}: only put the files on disk
+```
+
+* Dates are UTC days and both ends are inclusive. Files are cached in `~/.atmoz/cache/ucn`; the newest two days are
+  re-downloaded hourly (they are still being written) and older days are treated as final. `refresh=True` forces a download.
+* The server answers a missing L0b day with an ordinary page and a missing L2/L3 day with a 404. Both are treated the same:
+  `DownloadError` by default (all-or-nothing), or skipped with `skip_missing=True`. A missing day is never cached.
+* Variable names are left as published. L2 and L3 appear a day or more after L0b.

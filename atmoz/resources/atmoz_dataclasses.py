@@ -23,25 +23,29 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.image as mimg
 import copy
+import functools
 from types import SimpleNamespace
 from collections import namedtuple
 from pint import UnitRegistry
 
-# ureg = UnitRegistry()
-# try:
-#     ureg.define('ppbv = 1e-9 mole/mole = parts_per_billion_by_volume')
-# except Exception:
-#     pass
+@functools.lru_cache(maxsize=1)
+def _get_ureg() -> UnitRegistry:
+    """Shared pint registry, built on first use (keeps ``import atmoz`` fast).
 
-# try:
-#     ureg.define('ppmv = 1e-6 mole/mole = parts_per_million_by_volume')
-# except Exception:
-#     pass
+    Adds the mixing-ratio units atmospheric scientists use: ppbv, ppmv, pptv.
+    """
+    ureg = UnitRegistry()
+    for definition in (
+        "ppbv = 1e-9 mole/mole = parts_per_billion_by_volume",
+        "ppmv = 1e-6 mole/mole = parts_per_million_by_volume",
+        "pptv = 1e-12 mole/mole = parts_per_trillion_by_volume",
+    ):
+        try:
+            ureg.define(definition)
+        except Exception:  # already defined by this pint version
+            pass
+    return ureg
 
-# try:
-#     ureg.define('pptv = 1e-12 mole/mole = parts_per_trillion_by_volume')
-# except Exception:
-#     pass
 
 @dataclass
 class dataframe:
@@ -76,7 +80,7 @@ class dataframe:
             if hasattr(other, "magnitude") and hasattr(other, "units"):
                 # Convert to self.units if possible
                 try:
-                    factor = (1 * ureg(str(other.units))).to(self.units).magnitude
+                    factor = (1 * _get_ureg()(str(other.units))).to(self.units).magnitude
                     return other.magnitude * factor
                 except Exception:
                     # If not convertible, just use magnitude (will combine units in op)
@@ -86,7 +90,7 @@ class dataframe:
             return other.data
         # Try to convert other's units to self.units
         try:
-            factor = (1 * ureg(other.units)).to(self.units).magnitude
+            factor = (1 * _get_ureg()(other.units)).to(self.units).magnitude
             return other.data * factor
         except Exception as e:
             raise ValueError(f"Cannot convert units '{other.units}' to '{self.units}': {e}")
@@ -133,7 +137,7 @@ class dataframe:
         """
         Convert the units of the dataframe using Pint.
         """
-        _ureg = ureg_in or ureg
+        _ureg = ureg_in or _get_ureg()
         if not self.units:
             raise ValueError("Current units are not set; cannot convert.")
         factor = (1 * _ureg(self.units)).to(target_unit).magnitude

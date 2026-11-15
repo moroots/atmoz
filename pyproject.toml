@@ -49,6 +49,8 @@ lidar = [
     "pyyaml",
     "python-dateutil>=2.8.2",
     "earthaccess>=0.9.0",
+    "xarray>=2023.1.0",
+    "netcdf4>=1.7.2",
 ]
 models = [
     "pydantic>=2.10.6",
@@ -105,5 +107,4 @@ extend-exclude = ["dev"]
 [tool.ruff.lint]
 # Correctness only for now: syntax errors, undefined names, unused imports/vars in new code.
 select = ["E9", "F63", "F7", "F82", "F401", "F841"]
-# atmoz_dataclasses.py: `ureg` is referenced but its definition is commented out (known issue, tracked for 0.1.1).
-per-file-ignores = { "atmoz/resources/atmoz_dataclasses.py" = ["F401", "F841", "F821"], "atmoz/resources/*" = ["F401", "F841"], "atmoz/lidar/*" = ["F401", "F841"], "atmoz/models/*" = ["F401", "F841"], "atmoz/dataclasses/*" = ["F401", "F841"], "atmoz/data_access/*" = ["F401", "F841"], "atmoz/surface/utilities.py" = ["F401", "F841"] }
+per-file-ignores = { "atmoz/resources/*" = ["F401", "F841"], "atmoz/lidar/*" = ["F401", "F841"], "atmoz/models/*" = ["F401", "F841"], "atmoz/dataclasses/*" = ["F401", "F841"], "atmoz/data_access/*" = ["F401", "F841"], "atmoz/surface/utilities.py" = ["F401", "F841"] }

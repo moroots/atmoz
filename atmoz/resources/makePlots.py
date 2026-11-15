@@ -351,7 +351,7 @@ def site_map(instruments: Dict,
         map=dict(
             style="carto-positron",
             center=dict(lat=np.mean(params["bbox"]["lat"]), lon=np.mean(params["bbox"]["lon"])),
-            *params["map"]
+            **params["map"]
             ),
 
         margin=dict(l=0, r=0, t=40, b=0),

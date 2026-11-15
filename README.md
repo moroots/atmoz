@@ -21,6 +21,7 @@ and lighter design. It is a dev / science tool: it makes common things fast and 
   Streamed to a disk cache, parsed with Arrow's multi-threaded CSV reader (full-precision `float64`
   coordinates, `category` text columns), downloaded in parallel, all-or-nothing on failure.
 * **TOLNet ozone lidar** (`atmoz.lidar`): query, download and plot NASA TOLNet profiles.
+* **UCN ceilometers** (`atmoz.lidar`): Unified Ceilometer Network backscatter and boundary-layer files as `xarray` datasets.
 * **GEOS-CF model output** (`atmoz.models`): point extractions through OPeNDAP with a local cache.
 * **Data classes** (`atmoz.dataclasses`): `AtmoFrame` / `AtmoDataset` containers.
 * **Shared plumbing**: thread-safe HTTP sessions with retries, a file cache, a `.atmoz.env` secret store.
@@ -42,17 +43,18 @@ See the [installation guide](docs/installation.md).
 ```python
 from atmoz.surface import AirNow
 
-# Bulk EPA AQS: national hourly ozone for 2025 -> {"hourly_44201_2025.csv": DataFrame}
-data = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025)
+# Bulk EPA AQS: national hourly ozone for 2025. Always an atmoz_dataset;
+# ds.data == {"hourly_44201_2025.csv": DataFrame}
+ds = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025)
 
 # Only what you need: a bounding box and a few columns
-dc = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025,
-                     bbox=(-77.5, 38.5, -76.5, 39.5),
-                     columns=["Latitude", "Longitude", "Date GMT", "Time GMT", "Sample Measurement"])
+ds_roi = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025,
+                         bbox=(-77.5, 38.5, -76.5, 39.5),
+                         columns=["Latitude", "Longitude", "Date GMT", "Time GMT", "Sample Measurement"])
 
 # Live AirNow API (free key from https://docs.airnowapi.org/): save it once, use it forever
 AirNow.set_api_key()
-dataset = AirNow().import_data("2025-08-01", "2025-08-07", parameters=["OZONE", "PM25"])
+dataset = AirNow.download(endpoint="airnow", start_date="2025-08-01", end_date="2025-08-07", parameters=["OZONE", "PM25"])
 dataset.data, dataset.metadata
 ```
 
@@ -60,7 +62,7 @@ dataset.data, dataset.metadata
 from atmoz.lidar import TOLNET            # pip install "atmoz[lidar]"
 
 tolnet = TOLNET()
-tolnet.import_data(min_date="2025-07-28", max_date="2025-08-01", product_type=[4], processing_type=[1])
+tolnet.download(min_date="2025-07-28", max_date="2025-08-01", product_type=[4], processing_type=[1])
 tolnet.tolnet_curtains()
 ```
 
@@ -91,7 +93,8 @@ atmoz/
 │   ├── AtmoDataset.py
 │   └── AtmoFrame.py
 ├── lidar/
-│   └── tolnet.py
+│   ├── tolnet.py
+│   └── ucn.py             # Unified Ceilometer Network
 ├── models/
 │   └── geos_cf.py
 ├── resources/
@@ -101,9 +104,12 @@ atmoz/
 │   ├── parallelExecutor.py
 │   ├── sessionHandler.py
 │   ├── urls.py
+│   ├── utilities.py       # shared download plumbing
 │   └── ... (plotting, time and path helpers)
 ├── surface/
-│   ├── AirNow.py
+│   ├── AirNow.py          # AirNow facade: download() / fetch() / set_api_key()
+│   ├── AirNow_API.py      # AirNowAPI (live API)
+│   ├── AQS.py             # EPA_PreGen (yearly files), read_aqs_zip
 │   └── utilities.py
 └── exceptions.py
 ```
@@ -117,7 +123,7 @@ pytest                      # offline: HTTP is faked
 ruff check atmoz tests
 ```
 
-CI (GitLab) runs the tests on Python 3.11 - 3.13, lints, and checks the built wheel.
+CI (GitLab and GitHub Actions) runs the tests on Python 3.11 - 3.13, lints, and checks the built wheel.
 
 ## License
 

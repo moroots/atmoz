@@ -14,7 +14,7 @@ atmoz keeps its per-user files in one folder, `~/.atmoz/` (override with `ATMOZ_
 Secrets live in a plain `KEY=value` file named **`.atmoz.env`** (deliberately not `.env`, so it never collides
 with another tool). Lookup order:
 
-1. a value you pass explicitly (`AirNow(api_key="...")`)
+1. a value you pass explicitly (`AirNow.download(api_key="...")`)
 2. the process environment (`export ATMOZ_AIRNOW_API_KEY=...`)
 3. the nearest `.atmoz.env`, walking up from the current directory (per-project key)
 4. `~/.atmoz/.atmoz.env` (per-user key)

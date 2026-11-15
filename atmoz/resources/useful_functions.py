@@ -7,6 +7,7 @@ Created on Sun Aug 31 09:34:20 2025
 
 #%% 
 import io
+import copy
 import zipfile
 import requests
 
@@ -58,12 +59,12 @@ def get_asset(filename: str, package: str = "atmoz") -> Optional[Path]:
 #%% 
 def merge_dicts(default, override):
     """Recursively merge two dictionaries. Override values replace defaults."""
-    result = default.copy()
+    result = copy.deepcopy(default)   # deep copy: nested dicts must not be shared with the module defaults
     for k, v in override.items():
         if isinstance(v, dict) and isinstance(result.get(k), dict):
             # merge nested dicts
             result[k] = merge_dicts(result.get(k, {}), v)
         else:
             # override or add new key
-            result[k] = v
+            result[k] = copy.deepcopy(v)
     return result
