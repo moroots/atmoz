@@ -116,6 +116,14 @@ class AtmozFrame:
         return self.df[self._alt] if self._alt else None
 
     @property
+    def location(self) -> Optional[tuple]:
+        """``(lat, lon)`` of the frame (the median of the lat/lon columns), or None when it has no horizontal position."""
+        if not (self._lat and self._lon):
+            return None
+        lat, lon = self.df[self._lat].median(), self.df[self._lon].median()
+        return None if pd.isna(lat) or pd.isna(lon) else (float(lat), float(lon))
+
+    @property
     def axes(self) -> Dict[str, Optional[str]]:
         """Column names of the axes (``t`` is always the index)."""
         return {"t": "index", "lat": self._lat, "lon": self._lon, "alt": self._alt}

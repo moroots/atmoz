@@ -20,6 +20,7 @@ _LAZY = {
     "AirNow": ("atmoz.surface.AirNow", "AirNow"),
     "AtmozFrame": ("atmoz.dataclasses.AtmozFrame", "AtmozFrame"),
     "AtmozDataset": ("atmoz.dataclasses.AtmozDataset", "AtmozDataset"),
+    "collocate": ("atmoz.collocation", "collocate"),
     "set_secret": ("atmoz.resources.credentials", "set_secret"),
     "get_secret": ("atmoz.resources.credentials", "get_secret"),
     "delete_secret": ("atmoz.resources.credentials", "delete_secret"),

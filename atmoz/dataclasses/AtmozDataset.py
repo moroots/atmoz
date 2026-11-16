@@ -130,6 +130,26 @@ class AtmozDataset:
     def values(self):
         return self._frames.values()
 
+    def inventory(self) -> pd.DataFrame:
+        """One row per frame: where it is, what it holds and in which units, and its time span.
+
+        Columns: ``key``, ``lat``, ``lon``, ``alt_min``, ``alt_max`` (km, profiles only), ``value_unit``, ``units`` (all declared
+        units), ``start``, ``end``, ``rows``. The same table works for every source, so units and sites can be compared at a glance.
+        """
+        rows = []
+        for key, af in self._frames.items():
+            lat, lon = af.location or (None, None)
+            alt = af.alt
+            rows.append({
+                "key": key, "lat": lat, "lon": lon,
+                "alt_min": None if alt is None or alt.dropna().empty else float(alt.min()),
+                "alt_max": None if alt is None or alt.dropna().empty else float(alt.max()),
+                "value_unit": af.units.get("value"), "units": dict(af.units),
+                "start": af.df.index.min() if len(af.df) else None, "end": af.df.index.max() if len(af.df) else None,
+                "rows": len(af.df)})
+        return pd.DataFrame(rows, columns=["key", "lat", "lon", "alt_min", "alt_max", "value_unit", "units",
+                                          "start", "end", "rows"])
+
     def select(self, pattern: str) -> "AtmozDataset":
         """The frames whose key matches the glob *pattern* (``"*/OZONE"``), as a new dataset."""
         chosen = {k: v for k, v in self._frames.items() if fnmatch(k, pattern)}

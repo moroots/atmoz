@@ -140,3 +140,17 @@ def test_units_may_differ_between_frames():
     pm = AtmozFrame(make_df(), units={"value": "µg/m3"}, lat="lat", lon="lon")
     ds = AtmozDataset(frames={"a/OZONE": make_frame(), "a/PM2.5": pm})
     assert ds["a/PM2.5"].units["value"] == "µg/m3" and ds["a/OZONE"].units["value"] == "ppb"
+
+
+def test_location_and_inventory():
+    prof = make_df(alt=[0.5, 1.0, 1.5, 2.0, 2.5, 3.0])
+    ds = AtmozDataset(frames={
+        "a/OZONE": make_frame(),
+        "b/OZONE": AtmozFrame(prof, units={"value": "ppb", "alt": "km"}, lat="lat", lon="lon"),
+    })
+    assert ds["a/OZONE"].location == (39.0, -76.0)
+    assert AtmozFrame(make_df().drop(columns=["lat", "lon"])).location is None
+    inv = ds.inventory()
+    assert list(inv["key"]) == ["a/OZONE", "b/OZONE"] and list(inv["value_unit"]) == ["ppb", "ppb"]
+    assert inv.loc[0, "lat"] == 39.0 and inv.loc[0, "rows"] == 6
+    assert len(AtmozDataset().inventory()) == 0
