@@ -20,7 +20,7 @@ interactive ones) return the plotly `Figure`.
 
 | Plot | Backend | What it draws |
 |---|---|---|
-| `curtain` | matplotlib | Time-altitude curtain from a DataFrame (time index, altitude columns) or a dict of them such as `TOLNET.data[key]` |
+| `curtain` | matplotlib | Time-altitude curtain from a DataFrame (time index, altitude columns) or a dict of them such as one entry of `TOLNET.group(ds)` |
 | `profile` | matplotlib | Vertical profiles with optional uncertainty bands |
 | `windrose` | matplotlib (windrose) | Wind rose from direction and speed |
 | `site_map` | plotly | Interactive map of site locations |

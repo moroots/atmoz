@@ -17,22 +17,13 @@ Install the extra first: `pip install "atmoz[lidar]"`. JSON downloads need no lo
 ```python
 from atmoz.lidar import TOLNET
 
-tolnet = TOLNET()
+# One week of high-resolution ozone profiles -> an atmoz_dataset (cached on disk, all-or-nothing)
+ds = TOLNET.download("2025-07-28", "2025-08-01", product_type=[4], processing_type=[1])
+ds.data                  # {file_name: DataFrame}  (UTC time index, altitude columns)
 
-# Download one week of high-resolution ozone profiles
-tolnet.download(
-    min_date="2025-07-28",
-    max_date="2025-08-01",
-    product_type=[4],          # HIRES
-    processing_type=[1],       # Centrally Processed
-)
-
-# Plot every loaded instrument
-tolnet.tolnet_curtains()
-
-# Or plot a specific key
-key = list(tolnet.data.keys())[0]
-tolnet.plot_curtain(tolnet.data[key])
+groups = TOLNET.group(ds)                    # {(instrument, processing, "latxlon"): {"YYYY-MM-DD": DataFrame}}
+TOLNET.plot_curtains(ds)                     # one curtain per instrument / site
+TOLNET.plot_curtain(groups[next(iter(groups))], title="JPL SMOL-2")
 ```
 
 ---
@@ -85,293 +76,77 @@ Use either a point + radius **or** a bounding box — not both.
 
 ## `TOLNET` Class
 
-### `TOLNET()`
+Everything TOLNet lives in `atmoz/lidar/tolnet.py`: the API client, HDF reading and plotting. It follows the package
+[conventions](conventions.md): `download()` returns an `atmoz_dataset`, `fetch()` returns `{name: Path}`.
 
-No arguments. Initializes the API client with:
-- `self.base_url` = `"https://tolnet.larc.nasa.gov/api"`
-- `self.data` = `{}` — populated by `download()`
-- `self.meta_data` = `{}` — populated by `download()`
-- `self._errors` = `[]` — failed file IDs with error messages
+### `TOLNET.download(min_date, max_date, **query) → atmoz_dataset`
 
----
-
-### Discovery Properties
-
-These are `cached_property` attributes — fetched once on first access and cached for the session.
-
-#### `tolnet.products → pd.DataFrame`
-
-All available product types, indexed by ID.
+Lists the matching files, downloads each JSON file (4 threads, cached), and parses them.
 
 ```python
-print(tolnet.products)
-#     name
-# id
-# 1   O3Lidar
-# 4   HIRES
-# ...
-```
-
-#### `tolnet.instrument_groups → pd.DataFrame`
-
-All instrument groups (sites), indexed by ID. Contains name, institution, location.
-
-```python
-print(tolnet.instrument_groups)
-# Shows all TOLNet sites: NASA GSFC, NASA JPL, LaRC, NOAA CSL, UAH, ECCC, etc.
-```
-
-#### `tolnet.processing_types → pd.DataFrame`
-
-Processing type IDs and names.
-
-```python
-print(tolnet.processing_types)
-# 1: Centrally Processed (GLASS)
-# 2: In-House
-# 3: Unprocessed
-```
-
-#### `tolnet.file_types → pd.DataFrame`
-
-File format type IDs and names (HDF GEOMS, JSON, Image, etc.).
-
-#### `tolnet.api_schema → dict`
-
-Raw OpenAPI YAML schema for the TOLNet API.
-
----
-
-### `download(min_date, max_date, **kwargs)`
-
-Primary data fetch method. Queries the file list, downloads each matching JSON file in parallel (2 threads), and stores results in `self.data`.
-
-```python
-tolnet.download(
-    min_date="2025-07-01",
-    max_date="2025-07-31",
+ds = TOLNET.download(
+    "2025-07-01", "2025-07-31",
     product_type=[4],              # HIRES only
     processing_type=[1],           # Centrally Processed only
     instrument_group=[7, 8],       # specific sites
 )
 ```
 
-| Argument | Type | Required | Description |
-|----------|------|----------|-------------|
-| `min_date` | `str` | Yes | Start date `YYYY-MM-DD` |
-| `max_date` | `str` | Yes | End date `YYYY-MM-DD` |
-| `**kwargs` | | | Any `TOLNET_DATA_QUERY` field (see above). |
-| `GEOS_CF` | `bool` | No | If `True`, also fetch co-located GEOS-CF model data and merge into `self.data`. |
-
-**Returns:** `self` (chainable).
-
-After calling `download()`:
-- `tolnet.data` is populated (see [Data Structures](#data-structures))
-- `tolnet.meta_data` is populated with file-level metadata
-- `tolnet._errors` lists any files that failed to download/parse
-
----
-
-### `fetch(dest_dir, file_type, threaded, max_workers, **params)`
-
-Query the API file list and download matching files to disk.
-
-```python
-# Download JSON files (lightweight, no EarthData login needed)
-tolnet.fetch(
-    dest_dir="./tolnet_data",
-    file_type="json",
-    min_date="2025-07-01",
-    max_date="2025-07-31",
-    product_type=4,
-)
-
-# Download HDF GEOMS files (requires NASA EarthData credentials)
-tolnet.fetch(
-    dest_dir="./tolnet_hdf",
-    file_type="hdf",
-    max_workers=4,
-    min_date="2025-07-01",
-    max_date="2025-07-31",
-)
-```
-
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `dest_dir` | `str` | required | Output directory (created if missing). |
-| `file_type` | `str` | `"json"` | `"json"` or `"hdf"`. HDF requires NASA EarthData credentials. |
-| `threaded` | `bool` | `True` | Use parallel download. |
-| `max_workers` | `int` | `8` | Thread count for parallel download. |
-| `**params` | | | Any `TOLNET_DATA_QUERY` fields to filter the file list. |
+| `min_date`, `max_date` | `str` | required | `YYYY-MM-DD` range of the data. |
+| `**query` | | | Any `TOLNET_DATA_QUERY` field (see above). |
+| `max_workers` | `int` | `4` | Concurrent downloads. |
+| `use_cache`, `refresh`, `cache_dir` | | `True`, `False`, shared cache | Near-real-time files are re-checked hourly; final files never change. |
+| `silent`, `show_traceback`, `session_handler` | | | The usual options. |
 
-Files are saved as `{file_id}.json` or `{file_id}.hdf`.
+**Returns** an `atmoz_dataset` with `datatype="lidar"`:
 
----
+* `ds.data`: `{file_name: DataFrame}`. Index = UTC time, columns = altitude (km), values = ozone (ppbv).
+* `ds.metadata["info"]`: TOLNet's metadata per file (`LATITUDE.INSTRUMENT`, `LONGITUDE.INSTRUMENT`, `fileInfo`, ...).
+* `ds.metadata["groups"]`: `"instrument|processing|latxlon"` → the file names of that instrument.
+* `ds.metadata["file_list"]`: the API's file list as a DataFrame.
 
-### `plot_curtain(data, **kwargs)`
+**Raises** `NoDataError` if nothing matches, `DownloadError` if any file fails (nothing is returned; finished files stay cached).
+The old `GEOS_CF=True` option is gone: call `GEOS_CF.download(...)` at the instrument's coordinates instead.
 
-Render a time-altitude ozone curtain plot for one instrument/key.
+### `TOLNET.group(ds) → dict`
 
-```python
-key = ("NASA JPL SMOL-2", "Centrally Processed (GLASS)", "39.24x-76.363")
-tolnet.plot_curtain(tolnet.data[key])
+`{(instrument, processing, "latxlon"): {"YYYY-MM-DD": DataFrame}}`, the shape the curtain plot takes.
 
-# With options
-tolnet.plot_curtain(
-    tolnet.data[key],
-    title="JPL SMOL-2 — July 2025",
-    use_contourf=True,
-    xlims=["2025-07-01", "2025-07-07"],
-    time_resolution="30min",
-)
-```
+### `TOLNET.fetch(min_date, max_date, *, file_type="json", dest_dir=None, **query) → {file_name: Path}`
 
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `data` | `dict` | required | `{date_str: DataFrame}` — index = UTC datetime, columns = altitude (km) |
-| `title` | `str` | `None` | Plot title |
-| `use_contourf` | `bool` | `False` | Use `contourf` instead of `pcolormesh` |
-| `xlims` | `"auto" \| List[str]` | `"auto"` | Date range to display: `["2025-07-01", "2025-07-07"]` |
-| `time_resolution` | `"auto" \| str` | `"auto"` | Resample to a fixed resolution before plotting (e.g. `"30min"`, `"1h"`) |
-
-The color scale uses the standard TOLNet ozone color map. A TOLNet watermark is applied automatically. Near-real-time data includes an NRT indicator.
-
----
-
-### `tolnet_curtains(**kwargs)`
-
-Plot one curtain for every key in `self.data`. Uses the key tuple as the title unless `title` is overridden.
+Saves the raw files and returns their paths (`dest_dir` defaults to the atmoz cache). `file_type="hdf"` fetches the GEOMS HDF
+files and needs NASA EarthData credentials (see [Configuration](configuration.md#nasa-earthdata)).
 
 ```python
-tolnet.tolnet_curtains()
-tolnet.tolnet_curtains(use_contourf=True)
+paths = TOLNET.fetch("2025-07-01", "2025-07-31", file_type="hdf", dest_dir="./tolnet_hdf", product_type=4)
+nodes = TOLNET.open_hdf(paths.values())                    # {filename: node}, opened lazily
+nodes[next(iter(nodes))]["O3.MIXING.RATIO.VOLUME_DERIVED"][()]
 ```
 
-Accepts the same `**kwargs` as `plot_curtain()`.
-
----
-
-### `search_by_file_name(file_name, match_type) → pd.DataFrame`
-
-Search the API for files by name pattern.
+### Plotting
 
 ```python
-results = tolnet.search_by_file_name("JPL_2025")
-results = tolnet.search_by_file_name("2025-07", match_type="begins_with")
-results = tolnet.search_by_file_name(".hdf",    match_type="ends_with")
+TOLNET.plot_curtain(groups[key])                           # same as az.plot.curtain, plus the TOLNet watermark
+TOLNET.plot_curtain(groups[key], title="JPL SMOL-2", tz="US/Eastern", nrt=True)
+figs = TOLNET.plot_curtains(ds)                            # {group key: (fig, ax)}, one per instrument
 ```
 
-| Argument | Options | Default | Description |
-|----------|---------|---------|-------------|
-| `match_type` | `"exact_match"`, `"begins_with"`, `"ends_with"` | `"exact_match"` | How the name is matched |
+Both return `(fig, ax)`; options are those of [`curtain`](plotting.md) (`title`, `tz`, `altitude_units`, `sonde`, `style`, `figsize`, `nrt`,
+`watermark`), plus `show=True` to call `plt.show()` in scripts. The old `xlims`, `time_resolution` and `use_contourf` options are gone: slice the
+DataFrames before plotting (`df.loc["2025-07-28":"2025-07-30"]`, `df.resample("30min").mean()`).
 
-Returns the same DataFrame schema as `_get_files_list()`.
-
----
-
-### `calendar(instrument_group, file_type, product_type, processing_type) → pd.DataFrame`
-
-Return a chronological listing of available files for a specific instrument and file type.
+### Catalogue helpers (instance methods)
 
 ```python
-cal = tolnet.calendar(instrument_group=7, file_type=1)
-cal = tolnet.calendar(instrument_group="NASA JPL SMOL-2", file_type="HDF GEOMS", product_type=4)
+t = TOLNET()
+t.products; t.instrument_groups; t.processing_types; t.file_types      # DataFrames indexed by id, fetched once
+t.search_by_file_name("2025-07", match_type="begins_with")
+t.calendar(instrument_group=7, file_type=1)
 ```
 
----
-
-### `change_timezone(timezone) → self`
-
-Convert all timestamps in `self.data` to a new timezone in-place.
-
-```python
-tolnet.change_timezone("US/Eastern")
-tolnet.change_timezone("America/Los_Angeles")
-```
-
-Uses `dateutil.tz` timezone strings. Returns `self` (chainable).
-
----
-
-### `_get_files_list(**params) → pd.DataFrame`
-
-Fetch the paginated file list from the API. Accepts all `TOLNET_DATA_QUERY` fields as kwargs. Returns a DataFrame with columns matching the file list dtypes:
-
-`id`, `file_name`, `file_server_location`, `instrument_group_name`, `product_type_name`, `processing_type_name`, `file_type_name`, `start_data_date`, `end_data_date`, `upload_date`, `latitude`, `longitude`, `altitude`, `near_real_time`, `file_size`, `revision`, `public`, `isAccessible`, etc.
-
----
-
-## Data Structures
-
-### `tolnet.data`
-
-```python
-tolnet.data = {
-    (instrument_group_name, processing_type_name, "latXlon"): {
-        "YYYY-MM-DD": pd.DataFrame,   # index=UTC datetime, columns=altitude (km)
-        "YYYY-MM-DD": pd.DataFrame,
-        ...
-    },
-    ...
-}
-```
-
-**Key format:** `(str, str, str)` — e.g. `("NASA JPL SMOL-2", "Centrally Processed (GLASS)", "39.24x-76.363")`
-
-**Value DataFrame:** rows = UTC timestamped observations, columns = altitude levels in km, values = ozone mixing ratio (ppbv).
-
-### `tolnet.meta_data`
-
-```python
-tolnet.meta_data = {
-    (instrument_group_name, processing_type_name, "latXlon"): {
-        "filename.json": {metadata_dict},
-        ...
-    }
-}
-```
-
-Each metadata dict contains:
-- `LATITUDE.INSTRUMENT`, `LONGITUDE.INSTRUMENT` — instrument coordinates
-- `fileInfo` — dict with `start_data_date`, `end_data_date`, `instrument_group_name`, `processing_type_name`, etc.
-- `altitude` — altitude grid metadata
-- `datetime` — time axis metadata
-
-### `tolnet._errors`
-
-List of strings: `"Error processing file {filename}: {exception}"` for any files that failed during `download()`.
-
----
-
-## Common Patterns
-
-### Iterate over loaded data
-
-```python
-for key, daily_data in tolnet.data.items():
-    inst, proc, latlon = key
-    print(f"{inst} | {proc} | {latlon}: {len(daily_data)} days loaded")
-
-    for date, df in daily_data.items():
-        print(f"  {date}: {df.shape[0]} time steps, altitudes {df.columns.min():.1f}–{df.columns.max():.1f} km")
-```
-
-### Filter to a specific site
-
-```python
-target = [k for k in tolnet.data if "JPL" in k[0]]
-for key in target:
-    tolnet.plot_curtain(tolnet.data[key], title=str(key))
-```
-
-### Check available instrument IDs before querying
-
-```python
-tolnet = TOLNET()
-print(tolnet.instrument_groups[["name", "city", "state"]])
-print(tolnet.products)
-print(tolnet.processing_types)
-```
+`search_by_file_name` and `calendar` return DataFrames; `api_schema` is the parsed OpenAPI description.
 
 ---
 

@@ -32,6 +32,14 @@ Work after the 0.1.0 commit (planned as 0.1.1).
 - Tests for UCN, plotting, unit conversion and the GEOS-CF cache.
 
 ### Changed
+- **TOLNet consolidated into `atmoz/lidar/tolnet.py`** and brought in line with the conventions. `TOLNET.download()` / `fetch()` are classmethods;
+  `download()` returns an `atmoz_dataset` (`.data == {file_name: DataFrame}`, per-file metadata in `.metadata["info"]`) instead of filling `self.data`,
+  uses the shared session pool and file cache, and is all-or-nothing (`DownloadError`; `NoDataError` when nothing matches).
+  `fetch()` takes `min_date`/`max_date`/`**query` and `dest_dir=` (default: the cache). New `TOLNET.group(ds)` (the old `data[key][date]` shape),
+  `TOLNET.open_hdf()` and `TOLNET.plot_curtains(ds)`. `TOLNET.plot_curtain` now delegates to `atmoz.plotting.curtain` (one implementation; the
+  `xlims`, `time_resolution`, `use_contourf` options are gone). Removed: `TOLNET.data` / `meta_data` / `_errors`, `change_timezone`,
+  `tolnet_curtains` (use `plot_curtains`), and `download(GEOS_CF=True)`. The HDF helpers moved from `atmoz.resources.importData` to `atmoz.resources.hdf`
+  (and its duplicate `TOLNet` class is gone). `h5py` is now in the `lidar` extra.
 - **`AirNow.download()` returns the same shape for both endpoints:** `ds.data` is `{name: DataFrame}` and `ds.metadata` a dict.
   For `endpoint="airnow"` the per-site table moved from `ds.metadata` to `ds.metadata["sites"]`, and the frame is `ds.frame`
   (new `atmoz_dataset.frame` shortcut for single-frame results).
@@ -50,6 +58,7 @@ Work after the 0.1.0 commit (planned as 0.1.1).
 - Curtain theme: DejaVu/Inter-style fonts instead of `Courier New`, figure 11 x 4.4 in instead of 20 x 6, smaller labels.
 
 ### Fixed
+- UCN conversion could crash the interpreter (segfault) intermittently: the HDF5 library under netCDF4 is not thread-safe and two workers converted files at once. NetCDF reads are now serialized.
 - `surface.utilities.make_datetime` raised `TypeError` on the datetime `Date` columns the AQS reader returns; it now takes datetime or text dates.
 - `dataframe.convert_units()` and unit-aware arithmetic raised `NameError` (the pint registry was never defined); it is now built lazily and includes ppbv/ppmv/pptv.
 - `merge_dicts` shared nested dicts with the module defaults, so `TOLNET.plot_curtain` lost its colorbar label and ticks
@@ -59,7 +68,6 @@ Work after the 0.1.0 commit (planned as 0.1.1).
 
 ### Known issues
 - GEOS-CF module (`atmoz.models.geos_cf`): the previous API is broken and the module is being redesigned.
-  `TOLNET.download(GEOS_CF=True)` also calls a name (`models.geos_cf`) that no longer exists.
 - AirNow window logic assumes the API returns the `endDate` hour (inclusive); see `AirNowAPI.window_end_inclusive`. Not yet checked with a live key.
 - `EPA_PARAMETERS` (which parameter has which resolutions) has not been re-checked against EPA's current file list.
 - The UCN download path has been tested offline and on cached files, but its first-time download and conversion have not been run against the live server.

@@ -1,44 +1,41 @@
-# -*- coding: utf-8 -*-
+"""NASA TOLNet (Tropospheric Ozone Lidar Network): query, download and plot.
+
+One module for everything TOLNet:
+
+* the REST API client (:class:`TOLNET`): file catalogue, ``download()`` (parsed) and ``fetch()`` (raw files),
+* lazy HDF reading of fetched GEOMS files (:meth:`TOLNET.open_hdf`),
+* time-altitude curtain plots (:meth:`TOLNET.plot_curtain`, which uses :func:`atmoz.plotting.curtain`).
+
+Follows the package conventions (``docs/conventions.md``): ``download()`` returns an ``atmoz_dataset``,
+``fetch()`` returns ``{name: Path}``, downloads are cached and all-or-nothing.
 """
-Created on 2026-06-10
 
-@author: Maurice Roots
+from __future__ import annotations
 
-A Module for Downloading and Plotting TOLNet Data
-"""
-
-#%%
-
-# Math & Data
-import numpy as np
-import pandas as pd
-
-# Housekeeping
+import json
 import threading
 import warnings
-import yaml
-import requests
-from datetime import datetime
-from dateutil import tz
+from datetime import datetime, timedelta
 from functools import cached_property
 from pathlib import Path
-from typing import List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
-# Validation
-from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
+import pandas as pd
+import requests
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-# Plotting
-import matplotlib.pyplot as plt
-
-# Multi-Threading
-from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-# Internal
-from atmoz.resources import plot_utilities, useful_functions, colorbars, default_plot_params
+from atmoz.exceptions import NoDataError
+from atmoz.resources.atmoz_dataclasses import atmoz_dataset
+from atmoz.resources.cache import cache_dir as _cache_root
+from atmoz.resources.cache import download_to_cache
+from atmoz.resources.sessionHandler import SessionHandler
 from atmoz.resources.urls import build_url
-from atmoz import models
-from atmoz.data_access.NASA import EarthData
+from atmoz.resources.useful_functions import get_asset
+from atmoz.resources.utilities import PathLike, default_session_handler, run_jobs
+
+_FILE_KINDS = {"json": ("data", "json"), "hdf": ("data", "download")}   # file_type -> API path
+GroupKey = Tuple[str, str, str]   # (instrument group, processing type, "latxlon")
 
 
 # --------------------------------------------------------------------------------------------------------------------------------- #
@@ -167,531 +164,300 @@ class TOLNET_DATA_QUERY(BaseModel):
 # TOLNET Class
 # --------------------------------------------------------------------------------------------------------------------------------- #
 class TOLNET:
-    def __init__(self):
-        self.base_url = r"https://tolnet.larc.nasa.gov/api"
-        self.file_list_dtypes = {
-            "row": "int16",
-            "count": "int16",
-            "id": "int16",
-            "file_name": "str",
-            "file_server_location": "str",
-            "author": "str",
-            "instrument_group_id": "int16",
-            "product_type_id": "int16",
-            "file_type_id": "int16",
-            "start_data_date": "datetime64[ns]",
-            "end_data_date": "datetime64[ns]",
-            "upload_date": "datetime64[ns]",
-            "public": "bool",
-            "instrument_group_name": "str",
-            "folder_name": "str",
-            "current_pi": "str",
-            "doi": "str",
-            "citation_url": "str",
-            "product_type_name": "str",
-            "processing_type_name": "str",
-            "file_type_name": "str",
-            "revision": "int16",
-            "near_real_time": "str",
-            "file_size": "int64",
-            "latitude": "float64",
-            "longitude": "float64",
-            "altitude": "float64",
-            "isAccessible": "bool",
-            }
+    """Client for the TOLNet REST API (https://tolnet.larc.nasa.gov/api).
 
-        self.plot_theme = default_plot_params.curtain_plot_theme
-        self.plot_params = default_plot_params.tolnet_plot_params
-        self.watermark = useful_functions.get_asset("Watermark_TOLNet.png")
-        self.nrt = True
-        self.data = {}
-        self.meta_data = {}
-        self._errors = []
-        return
+    >>> ds = TOLNET.download("2025-07-28", "2025-08-01", product_type=[4], processing_type=[1])
+    >>> groups = TOLNET.group(ds)                  # {(instrument, processing, "latxlon"): {date: DataFrame}}
+    >>> TOLNET.plot_curtain(groups[next(iter(groups))])
+
+    * :meth:`download` -> :class:`~atmoz.atmoz_dataset` (``.data == {file_name: DataFrame}``; ``.metadata`` has the
+      per-file TOLNet metadata, the file list and the instrument groups). JSON needs no login.
+    * :meth:`fetch`    -> ``{file_name: path}`` (raw ``json`` or ``hdf`` files; HDF needs NASA EarthData credentials).
+
+    The catalogue helpers (:attr:`products`, :attr:`file_types`, :attr:`instrument_groups`, :attr:`processing_types`,
+    :meth:`calendar`, :meth:`search_by_file_name`) work on an instance: ``TOLNET().products``.
+    """
+
+    base_url = "https://tolnet.larc.nasa.gov/api"
+    file_list_dtypes = {
+        "row": "int16", "count": "int16", "id": "int32", "file_name": "str", "file_server_location": "str",
+        "author": "str", "instrument_group_id": "int16", "product_type_id": "int16", "file_type_id": "int16",
+        "start_data_date": "datetime64[ns]", "end_data_date": "datetime64[ns]", "upload_date": "datetime64[ns]",
+        "public": "bool", "instrument_group_name": "str", "folder_name": "str", "current_pi": "str", "doi": "str",
+        "citation_url": "str", "product_type_name": "str", "processing_type_name": "str", "file_type_name": "str",
+        "revision": "int16", "near_real_time": "str", "file_size": "int64", "latitude": "float64",
+        "longitude": "float64", "altitude": "float64", "isAccessible": "bool",
+    }
+
+    def __init__(self, session_handler: Optional[SessionHandler] = None):
+        self._handler = session_handler or default_session_handler()
+
+    # ---- catalogue ---------------------------------------------------------------------------------------
+    def _get(self, *path: Any, params: Optional[dict] = None, timeout: float = 30) -> requests.Response:
+        response = self._handler.session().get(build_url(self.base_url, *path), params=params, timeout=timeout)
+        response.raise_for_status()
+        return response
+
+    def _table(self, *path: str) -> pd.DataFrame:
+        return pd.DataFrame(self._get(*path).json()).sort_values(by=["id"]).set_index("id", drop=True)
 
     @cached_property
-    def api_schema(self):
-        """Returns a yaml object containing api_schema information."""
-        response = requests.get(build_url(self.base_url, "openapi.yml"))
-        response.raise_for_status()
-        return yaml.safe_load(response.text)
+    def api_schema(self) -> dict:
+        """The API's OpenAPI description (parsed YAML)."""
+        return yaml.safe_load(self._get("openapi.yml").text)
 
     @cached_property
     def products(self) -> pd.DataFrame:
-        """Returns a DataFrame of all product types."""
-        response = requests.get(build_url(self.base_url, "data", "product_types"))
-        response.raise_for_status()
-        return (
-            pd.DataFrame(response.json())
-            .sort_values(by=["id"])
-            .set_index("id", drop=True)
-            )
+        """All product types."""
+        return self._table("data", "product_types")
 
     @cached_property
     def file_types(self) -> pd.DataFrame:
-        """Returns a DataFrame of all file types."""
-        response = requests.get(build_url(self.base_url, "data", "file_types"))
-        response.raise_for_status()
-        return (
-            pd.DataFrame(response.json())
-            .sort_values(by=["id"])
-            .set_index("id", drop=True)
-            )
+        """All file types."""
+        return self._table("data", "file_types")
 
     @cached_property
     def instrument_groups(self) -> pd.DataFrame:
-        """Returns a DataFrame of all instrument groups."""
-        response = requests.get(build_url(self.base_url, "instruments", "groups"))
-        response.raise_for_status()
-        return (
-            pd.DataFrame(response.json())
-            .sort_values(by=["id"])
-            .set_index("id", drop=True)
-            )
+        """All instrument groups."""
+        return self._table("instruments", "groups")
 
     @cached_property
     def processing_types(self) -> pd.DataFrame:
-        """Returns a DataFrame of all processing types."""
-        response = requests.get(build_url(self.base_url, "data", "processing_types"))
-        response.raise_for_status()
-        return (
-            pd.DataFrame(response.json())
-            .sort_values(by=["id"])
-            .set_index("id", drop=True)
-            )
+        """All processing types."""
+        return self._table("data", "processing_types")
+
+    def _empty_files(self) -> pd.DataFrame:
+        return pd.DataFrame(columns=list(self.file_list_dtypes)).astype(self.file_list_dtypes)
 
     def _get_files_list(self, **params) -> pd.DataFrame:
-        """
-        Fetch paginated TOLNet file list. Accepts all TOLNET_DATA_QUERY fields as kwargs.
-        """
-        query = TOLNET_DATA_QUERY(**params)
-        query_dict = query.model_dump(exclude_none=True)
-
-        session = requests.Session()
-        data_frames = []
-        page = 1
-
+        """The (paginated) TOLNet file list for a query. Accepts every :class:`TOLNET_DATA_QUERY` field."""
+        query = TOLNET_DATA_QUERY(**params).model_dump(exclude_none=True)
+        frames, page = [], 1
         while True:
-            url = build_url(self.base_url, "data", page)
-            response = session.get(url, params=query_dict, timeout=10)
+            response = self._handler.session().get(build_url(self.base_url, "data", page), params=query, timeout=30)
             if response.status_code != 200:
                 break
-            json_data = response.json()
-            if not json_data:
+            payload = response.json()
+            if not payload:
                 break
-            data_frames.append(pd.DataFrame(json_data))
+            frames.append(pd.DataFrame(payload))
             page += 1
-
-        if not data_frames:
-            return pd.DataFrame().astype(self.file_list_dtypes)
-
-        df = pd.concat(data_frames, ignore_index=True)
-        for col in ["start_data_date", "end_data_date", "upload_date"]:
+        if not frames:
+            return self._empty_files()
+        df = pd.concat(frames, ignore_index=True)
+        for col in ("start_data_date", "end_data_date", "upload_date"):
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
+        return df.reindex(columns=list(self.file_list_dtypes)).astype(self.file_list_dtypes)
 
-        return df.astype(self.file_list_dtypes)
-
-    def search_by_file_name(
-        self,
-        file_name: str,
-        match_type: Literal["exact_match", "begins_with", "ends_with"] = "exact_match",
-        ) -> pd.DataFrame:
-        """
-        Search for files by name via GET /data/search_by_file_name.
-
-        Parameters
-        ----------
-        file_name : str
-            The file name (or partial name) to search for.
-        match_type : str
-            "exact_match" (default), "begins_with", or "ends_with".
-        """
-        response = requests.get(
-            build_url(self.base_url, "data", "search_by_file_name"),
-            params={"file_name": file_name, "match_type": match_type},
-            timeout=10,
-            )
-        response.raise_for_status()
-        data = response.json()
+    def search_by_file_name(self, file_name: str,
+                            match_type: Literal["exact_match", "begins_with", "ends_with"] = "exact_match") -> pd.DataFrame:
+        """Find files by name (``GET /data/search_by_file_name``)."""
+        data = self._get("data", "search_by_file_name", params={"file_name": file_name, "match_type": match_type}).json()
         if not data:
-            return pd.DataFrame().astype(self.file_list_dtypes)
-        return pd.DataFrame(data).astype(self.file_list_dtypes)
+            return self._empty_files()
+        return pd.DataFrame(data).reindex(columns=list(self.file_list_dtypes)).astype(self.file_list_dtypes)
 
-    def calendar(
-        self,
-        instrument_group: Union[str, int],
-        file_type: Union[str, int],
-        product_type: Optional[Union[str, int]] = None,
-        processing_type: Optional[Union[str, int]] = None,
-        ) -> pd.DataFrame:
-        """
-        Return a chronological listing via GET /data/calendar.
-
-        Parameters
-        ----------
-        instrument_group : str or int
-            Instrument group name or ID (required).
-        file_type : str or int
-            File type name or ID (required).
-        product_type : str or int, optional
-        processing_type : str or int, optional
-        """
-        params: dict = {"instrument_group": str(instrument_group), "file_type": str(file_type)}
+    def calendar(self, instrument_group: Union[str, int], file_type: Union[str, int],
+                 product_type: Optional[Union[str, int]] = None,
+                 processing_type: Optional[Union[str, int]] = None) -> pd.DataFrame:
+        """Chronological listing of what exists (``GET /data/calendar``)."""
+        params: Dict[str, str] = {"instrument_group": str(instrument_group), "file_type": str(file_type)}
         if product_type is not None:
             params["product_type"] = str(product_type)
         if processing_type is not None:
             params["processing_type"] = str(processing_type)
-        response = requests.get(build_url(self.base_url, "data", "calendar"), params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if not data:
-            return pd.DataFrame()
-        return pd.DataFrame(data)
+        data = self._get("data", "calendar", params=params).json()
+        return pd.DataFrame(data) if data else pd.DataFrame()
 
-    def _add_timezone(self, time):
-        return [utc.replace(tzinfo=tz.gettz("UTC")) for utc in time]
+    # ---- process: validate -> url -> fetch_one -> parse_one -> assemble -----------------------------------
+    def _validate(self, min_date: Optional[str], max_date: Optional[str], file_type: str, query: dict) -> List[dict]:
+        """Check the request, ask the API which files match, and expand it into one job per file."""
+        if file_type not in _FILE_KINDS:
+            raise ValueError("file_type must be 'json' or 'hdf'")
+        files = self._get_files_list(min_date=min_date, max_date=max_date, **query)
+        if files.empty:
+            raise NoDataError("TOLNet has no files for this request.")
+        jobs = [{"id": int(r.id), "file_name": str(r.file_name), "file_type": file_type,
+                 "nrt": str(r.near_real_time).lower() == "true"} for r in files.itertuples()]
+        self._files = files
+        return jobs
 
-    def change_timezone(self, timezone: str):
-        to_zone = tz.gettz(timezone)
-        for key in self.data.keys():
-            for date in self.data[key].keys():
-                time = self.data[key][date].index.to_list()
-                self.data[key][date].index = [t.astimezone(to_zone) for t in time]
-        return self
+    def _url(self, job: dict) -> str:
+        return build_url(self.base_url, *_FILE_KINDS[job["file_type"]], job["id"])
 
-    def _json_to_dict(self, file_id: int) -> dict:
-        url = build_url(self.base_url, "data", "json", file_id)
-        response = requests.get(url)
-        response.raise_for_status()
-        return response.json()
+    @staticmethod
+    def _filename(job: dict) -> str:
+        return f"{job['id']}.{job['file_type']}"
 
-    def _unpack_data(self, meta_data: dict) -> pd.DataFrame:
-        df = pd.DataFrame(
-            meta_data["value"]["data"],
-            columns=meta_data["altitude"]["data"],
-            index=pd.to_datetime(meta_data["datetime"]["data"]),
-            )
-        df = df.apply(pd.to_numeric, errors="coerce")
-        df.sort_index(inplace=True)
-        return df
+    def _session_for(self, file_type: str):
+        """JSON needs no login (shared pool). HDF needs NASA EarthData credentials (one session per thread)."""
+        if file_type == "json":
+            return self._handler.session()
+        local = self.__dict__.setdefault("_earthdata", threading.local())
+        if not hasattr(local, "session"):
+            from atmoz.data_access.NASA import EarthData   # lazy: needs the `nasa` extra
+            local.session = EarthData().auth.get_session()
+        return local.session
 
-    def download(self, min_date: str, max_date: str, **kwargs):
-        """
-        Download TOLNet JSON data into memory and store in self.data.
+    def _fetch_one(self, job: dict, *, dest_dir: Path, refresh: bool, use_cache: bool = True) -> Path:
+        """One job -> a file on disk. Near-real-time files are re-checked hourly, final ones never change."""
+        dest = dest_dir / self._filename(job)
+        if not use_cache:
+            refresh = True
+        return download_to_cache(self._url(job), dest, self._session_for(job["file_type"]),
+                                 max_age=timedelta(hours=1) if job["nrt"] else None, refresh=refresh)
 
-        Parameters
-        ----------
-        min_date : str
-            Start date in YYYY-MM-DD format.
-        max_date : str
-            End date in YYYY-MM-DD format.
-        **kwargs
-            Any TOLNET_DATA_QUERY field (product_type, instrument_group, etc.).
-            Pass GEOS_CF=True to also fetch co-located GEOS-CF model data.
-        """
-        geos_cf = kwargs.pop("GEOS_CF", False)
+    @staticmethod
+    def _parse_one(path: PathLike) -> Tuple[dict, pd.DataFrame]:
+        """One TOLNet JSON file -> (its metadata, a DataFrame indexed by UTC time with altitude columns)."""
+        with open(path, "r", encoding="utf-8") as fh:
+            meta = json.load(fh)
+        df = pd.DataFrame(meta["value"]["data"], columns=meta["altitude"]["data"],
+                          index=pd.to_datetime(meta["datetime"]["data"], utc=True))
+        return meta, df.apply(pd.to_numeric, errors="coerce").sort_index()
 
-        def process_file(file_name, file_id):
-            meta_data = self._json_to_dict(file_id)
-            data = self._unpack_data(meta_data)
-            data.index = self._add_timezone(data.index.to_list())
-            return file_name, meta_data, data
+    def _load_one(self, job: dict, **kw) -> Tuple[dict, pd.DataFrame]:
+        return self._parse_one(self._fetch_one(job, **kw))
 
-        self.files = self._get_files_list(min_date=min_date, max_date=max_date, **kwargs)
-        self.request_dates = (min_date, max_date)
-        self.data = {}
-        self.meta_data = {}
-        self._errors = []
+    @staticmethod
+    def _group_key(meta: dict) -> GroupKey:
+        info = meta["fileInfo"]
+        return (info["instrument_group_name"], info["processing_type_name"],
+                f"{meta['LATITUDE.INSTRUMENT']}x{meta['LONGITUDE.INSTRUMENT']}")
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            future_to_file = {
-                executor.submit(process_file, file_name, file_id): file_name
-                for file_name, file_id in zip(self.files["file_name"], self.files["id"])
-                }
+    def _assemble(self, loaded: Dict[str, Tuple[dict, pd.DataFrame]], files: pd.DataFrame) -> atmoz_dataset:
+        data = {name: df for name, (_, df) in loaded.items()}
+        info = {name: meta for name, (meta, _) in loaded.items()}
+        groups: Dict[str, List[str]] = {}
+        for name, meta in info.items():
+            groups.setdefault("|".join(self._group_key(meta)), []).append(name)
+        metadata = {"endpoint": "tolnet", "files": list(data), "rows": {n: len(d) for n, d in data.items()},
+                    "info": info, "groups": groups, "file_list": files}
+        return atmoz_dataset(data=data, metadata=metadata, datatype="lidar")
 
-            for future in tqdm(
-                as_completed(future_to_file),
-                total=len(future_to_file),
-                desc="Downloading TOLNet Data",
-                ncols=100,
-                ):
-                file_name = future_to_file[future]
-                try:
-                    file_name, meta_data, data = future.result()
-
-                    lat_lon = (
-                        str(meta_data["LATITUDE.INSTRUMENT"])
-                        + "x"
-                        + str(meta_data["LONGITUDE.INSTRUMENT"])
-                        )
-                    date = meta_data["fileInfo"]["start_data_date"].split(" ")[0]
-                    key = (
-                        meta_data["fileInfo"]["instrument_group_name"],
-                        meta_data["fileInfo"]["processing_type_name"],
-                        lat_lon,
-                        )
-
-                    if key not in self.data:
-                        self.data[key] = {}
-                        self.meta_data[key] = {}
-
-                    self.data[key][date] = data
-                    self.meta_data[key][file_name] = meta_data
-
-                except Exception as e:
-                    self._errors.append(f"Error processing file {file_name}: {e}")
-
-        if geos_cf:
-            geos_cf_model = models.geos_cf()
-            for key in list(self.data.keys()):
-                geos_cf_model.get_geos_data_multithreaded(
-                    key[2],
-                    self.request_dates[0],
-                    self.request_dates[1],
-                    )
-            for geos_key, geos_dates in geos_cf_model.data.items():
-                self.data[geos_key] = geos_dates
-
-        if self._errors:
-            warnings.warn(
-                f"{len(self._errors)} file(s) failed to process. "
-                "Check self._errors for details.",
-                stacklevel=2,
-            )
-        if not self.data and not self.files.empty:
-            warnings.warn(
-                "download completed but self.data is empty — "
-                "all files may have failed. Check self._errors.",
-                stacklevel=2,
-            )
-
-        return self
-
-    def _fetch_one(self, file_id: Union[int, str], url_path: str):
-        url = build_url(self.base_url, *url_path.strip("/").split("/"), file_id)
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            return file_id, response.content
-        print(f"Failed to download file {file_id}. Status code: {response.status_code}")
-        return file_id, None
-
-    def fetch(self, dest_dir: str, file_type: str = "json", threaded: bool = True, max_workers: int = 8, **params):
-        """
-        Query the file list and download matching files to dest_dir.
+    # ---- public --------------------------------------------------------------------------------------------
+    @classmethod
+    def download(cls,
+                 min_date: str,
+                 max_date: str,
+                 *,
+                 max_workers: int = 4,
+                 use_cache: bool = True,
+                 refresh: bool = False,
+                 cache_dir: Optional[PathLike] = None,
+                 silent: bool = False,
+                 show_traceback: bool = False,
+                 session_handler: Optional[SessionHandler] = None,
+                 **query) -> atmoz_dataset:
+        """Download (once, then cached) and parse every matching TOLNet JSON file.
 
         Parameters
         ----------
-        dest_dir : str
-            Directory to save downloaded files.
-        file_type : str
-            "json" (default) or "hdf".
-        threaded : bool
-            Use parallel download (default True).
-        max_workers : int
-            Thread count for parallel download (default 8).
-        **params
-            Any TOLNET_DATA_QUERY fields to filter the file list.
-        """
-        files_list = self._get_files_list(**params)
-        if files_list.empty:
-            print("No files found for the given query parameters.")
-            return []
-        if threaded:
-            return self._fetch_files_threaded(files_list, dest_dir, file_type=file_type, max_workers=max_workers)
-        else:
-            return self._fetch_files(files_list, dest_dir, file_type=file_type)
-
-    def _fetch_files(self, files_list: pd.DataFrame, dest_dir: str, file_type: str = "json"):
-        """Sequential authenticated download of TOLNet files to disk."""
-        dest_dir = Path(dest_dir)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        session = EarthData().auth.get_session()
-
-        for idx, file_id in enumerate(files_list.id, start=1):
-            if file_type == "json":
-                url = build_url(self.base_url, "data", "json", file_id)
-                ext = "json"
-            elif file_type == "hdf":
-                url = build_url(self.base_url, "data", "download", file_id)
-                ext = "hdf"
-            else:
-                raise ValueError("file_type must be 'json' or 'hdf'")
-
-            dest_path = dest_dir / f"{file_id}.{ext}"
-            try:
-                r = session.get(url, timeout=30)
-                r.raise_for_status()
-                dest_path.write_bytes(r.content)
-            except requests.RequestException as e:
-                print(f"[{idx}/{len(files_list)}] Failed {file_id}: {e}")
-            else:
-                print(f"[{idx}/{len(files_list)}] Downloaded {file_id}")
-
-    def _fetch_files_threaded(
-        self,
-        files_list: pd.DataFrame,
-        dest_dir: str,
-        file_type: str = "json",
-        max_workers: int = 8,
-        ) -> list:
-        """Parallel authenticated download of TOLNet files to disk."""
-        dest_dir = Path(dest_dir)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-
-        _local = threading.local()
-
-        def _get_session():
-            if not hasattr(_local, "session"):
-                _local.session = EarthData().auth.get_session()
-            return _local.session
-
-        def _fetch_file(file_id):
-            if file_type == "json":
-                url = build_url(self.base_url, "data", "json", file_id)
-                ext = "json"
-            elif file_type == "hdf":
-                url = build_url(self.base_url, "data", "download", file_id)
-                ext = "hdf"
-            else:
-                raise ValueError("file_type must be 'json' or 'hdf'")
-            dest_path = dest_dir / f"{file_id}.{ext}"
-            try:
-                r = _get_session().get(url, timeout=30)
-                r.raise_for_status()
-                dest_path.write_bytes(r.content)
-            except requests.RequestException as e:
-                return file_id, False, str(e)
-            return file_id, True, None
-
-        results = []
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_fetch_file, fid): fid for fid in files_list.id}
-            for future in as_completed(futures):
-                fid, success, error = future.result()
-                if success:
-                    print(f"Downloaded {fid}")
-                else:
-                    print(f"Failed {fid}: {error}")
-                results.append((fid, success, error))
-
-        return results
-
-    def plot_curtain(self, data: dict, **kwargs):
-        """
-        Render a time-altitude curtain plot of ozone mixing ratio.
-
-        Parameters
-        ----------
-        data : dict
-            Keyed by date string (YYYY-MM-DD); values are DataFrames with
-            datetime index and altitude columns.
-        **kwargs
-            Overrides for self.plot_params. Also accepts:
-              xlims : "auto" | [min_date_str, max_date_str]
-              time_resolution : "auto" | pandas offset string (e.g. "30min")
-              use_contourf : bool (default False, uses pcolormesh)
-              show : bool (default False); call ``plt.show()`` at the end (scripts)
+        min_date, max_date:
+            ``YYYY-MM-DD`` range of the data.
+        **query:
+            Any :class:`TOLNET_DATA_QUERY` field: ``product_type``, ``instrument_group``, ``processing_type``,
+            ``near_real_time``, ``latitude``/``longitude``/``radius`` or a bounding box, ...
+        max_workers, use_cache, refresh, cache_dir, silent, show_traceback, session_handler:
+            The usual options (see ``docs/conventions.md``).
 
         Returns
         -------
-        (fig, ax)
+        atmoz_dataset
+            ``datatype="lidar"``; ``.data == {file_name: DataFrame}`` (UTC time index, altitude columns).
+            ``.metadata``: ``info`` (TOLNet's metadata per file), ``groups`` (``"instrument|processing|latxlon"`` ->
+            file names), ``file_list``. Use :meth:`group` to get frames per instrument and day.
+
+        Raises
+        ------
+        NoDataError: nothing matches. DownloadError: any file fails (nothing is returned).
         """
-        import copy
-        show = kwargs.pop("show", False)   # True: call plt.show() (scripts); notebooks display the figure on their own
-        params = copy.deepcopy(useful_functions.merge_dicts(self.plot_params, kwargs))
-        xlims = params.pop("xlims", "auto")
-        time_resolution = params.pop("time_resolution", "auto")
+        if "GEOS_CF" in query:
+            raise TypeError("TOLNET.download(GEOS_CF=...) is gone. Use atmoz.models.GEOS_CF.download(...) at the "
+                            "instrument's latitude/longitude (see ds.metadata['info']).")
+        api = cls(session_handler)
+        jobs = api._validate(min_date, max_date, "json", query)
+        dest_dir = Path(cache_dir) if cache_dir else _cache_root("tolnet")
+        loaded = run_jobs(
+            lambda job: api._load_one(job, dest_dir=dest_dir, refresh=refresh, use_cache=use_cache),
+            jobs, key=lambda j: j["file_name"], describe=lambda j: j["file_name"], noun="TOLNet file",
+            desc="Downloading TOLNet data", max_workers=max_workers, silent=silent, show_traceback=show_traceback,
+        )
+        return api._assemble(loaded, api._files)
 
-        if "title" in params:
-            if "ax.set_title" not in params:
-                params["ax.set_title"] = {}
-            params["ax.set_title"]["label"] = str(params.pop("title"))
+    @classmethod
+    def fetch(cls,
+              min_date: Optional[str] = None,
+              max_date: Optional[str] = None,
+              *,
+              file_type: Literal["json", "hdf"] = "json",
+              dest_dir: Optional[PathLike] = None,
+              max_workers: int = 4,
+              refresh: bool = False,
+              silent: bool = False,
+              show_traceback: bool = False,
+              session_handler: Optional[SessionHandler] = None,
+              **query) -> Dict[str, Path]:
+        """Save the matching raw files to disk and return ``{file_name: path}`` (parse them yourself).
 
-        cmap, norm = colorbars.tolnet_ozone()
+        ``file_type="hdf"`` fetches the GEOMS HDF files (needs NASA EarthData credentials, see
+        ``docs/configuration.md``); open them with :meth:`open_hdf`. ``dest_dir`` defaults to the atmoz cache.
+        """
+        api = cls(session_handler)
+        jobs = api._validate(min_date, max_date, file_type, query)
+        folder = Path(dest_dir) if dest_dir else _cache_root("tolnet")
+        folder.mkdir(parents=True, exist_ok=True)
+        return run_jobs(
+            lambda job: api._fetch_one(job, dest_dir=folder, refresh=refresh),
+            jobs, key=lambda j: j["file_name"], describe=lambda j: j["file_name"], noun="TOLNet file",
+            desc="Fetching TOLNet files", max_workers=max_workers, silent=silent, show_traceback=show_traceback,
+        )
 
-        with plt.rc_context(self.plot_theme):
-            fig, ax = plt.subplots()
+    # ---- helpers on results -----------------------------------------------------------------------------------
+    @staticmethod
+    def group(ds: atmoz_dataset) -> Dict[GroupKey, Dict[str, pd.DataFrame]]:
+        """``{(instrument, processing, "latxlon"): {"YYYY-MM-DD": DataFrame}}``: the shape the curtain plot takes."""
+        out: Dict[GroupKey, Dict[str, pd.DataFrame]] = {}
+        for name, meta in ds.metadata["info"].items():
+            key = TOLNET._group_key(meta)
+            day = meta["fileInfo"]["start_data_date"].split(" ")[0]
+            out.setdefault(key, {})[day] = ds.data[name]
+        return {k: dict(sorted(v.items())) for k, v in out.items()}
 
-            dates = sorted(list(data.keys()))
+    @staticmethod
+    def open_hdf(filepaths) -> Dict[str, Any]:
+        """Lazily open fetched HDF files: ``{filename: node}`` (``node["O3.MIXING.RATIO.VOLUME_DERIVED"][()]``)."""
+        from atmoz.resources.hdf import open_hdf
+        return open_hdf(filepaths)
 
-            if xlims == "auto":
-                pass
-            elif isinstance(xlims, list):
-                xlims = pd.to_datetime(xlims, utc=True)
-                xlims = [xlims.min(), xlims.max()]
-                dates_dt = pd.to_datetime(dates, utc=True)
-                dates = [
-                    str(x.strftime("%Y-%m-%d"))
-                    for x in dates_dt[
-                        (dates_dt >= xlims[0]) & (dates_dt <= xlims[1])
-                        ]
-                    ]
+    # ---- plotting (one implementation: atmoz.plotting.curtain) --------------------------------------------------
+    @staticmethod
+    def plot_curtain(data, **kwargs):
+        """Ozone curtain of one DataFrame or a ``{date: DataFrame}`` dict. Returns ``(fig, ax)``.
 
-            im = None
-            for date in dates:
-                df = data[date].copy() if xlims == "auto" else data[date].copy()[xlims[0]:xlims[1]]
-
-                if df.empty:
-                    continue
-
-                if time_resolution == "auto":
-                    if len(df) > 1:
-                        resolution = np.min([df.index[i] - df.index[i - 1] for i in range(1, len(df))])
-                        df = df.resample(f"{resolution.seconds}s").mean()
-                else:
-                    df = df.resample(f"{time_resolution}").mean()
-
-                X, Y, Z = df.index, df.columns, df.to_numpy().T
-
-                if params.get("use_contourf", False):
-                    levels = norm.boundaries
-                    im = ax.contourf(X, Y, Z, levels=levels, cmap=cmap, norm=norm)
-                else:
-                    im = ax.pcolormesh(X, Y, Z, cmap=cmap, norm=norm, shading="nearest", alpha=1)
-
-            if im is not None:
-                params["fig.colorbar"]["mappable"] = im
-            else:
-                params.pop("fig.colorbar", None)
-
-            plot_utilities.apply_datetime_axis(ax)
-            plot_utilities.apply_plot_params(fig, ax, **params)
-
-            if self.watermark:
-                plot_utilities.apply_watermark(fig, self.watermark)
-
-            if self.nrt is True:
-                plot_utilities.apply_near_real_time(ax)
-
-            if show:
-                plt.show()
+        Same as ``atmoz.plot.curtain``; adds the TOLNet watermark unless you pass ``watermark=None``/a path.
+        Pass ``show=True`` to call ``plt.show()`` (scripts).
+        """
+        from atmoz.plotting.curtain import curtain
+        show = kwargs.pop("show", False)
+        kwargs.setdefault("watermark", get_asset("Watermark_TOLNet.png"))
+        fig, ax = curtain(data, **kwargs)
+        if show:
+            import matplotlib.pyplot as plt
+            plt.show()
         return fig, ax
 
-    def tolnet_curtains(self, **kwargs):
-        """Plot one curtain per (instrument_group, processing_type, lat_lon) key."""
-        for key, item in self.data.items():
-            kw = dict(kwargs)
-            if "title" not in kw:
-                kw["title"] = str(key)
-            self.plot_curtain(item, **kw)
-        return self
+    @staticmethod
+    def plot_curtains(ds: atmoz_dataset, **kwargs) -> Dict[GroupKey, tuple]:
+        """One curtain per (instrument, processing type, site) in *ds*: ``{group key: (fig, ax)}``."""
+        out = {}
+        for key, frames in TOLNET.group(ds).items():
+            out[key] = TOLNET.plot_curtain(frames, **{"title": " / ".join(key), **kwargs})
+        return out
 
 
 if __name__ == "__main__":
-    tolnet = TOLNET()
-
-    date_start = "2025-07-28"
-    date_end = "2025-08-01"
-
-    tolnet.download(
-        min_date=date_start,
-        max_date=date_end,
-        product_type=[4],
-        GEOS_CF=False,
-        )
-
-    tolnet.plot_curtain(
-        tolnet.data[("NASA JPL SMOL-2", "Centrally Processed (GLASS)", "39.24x-76.363")],
-        show=True,
-        )
+    ds = TOLNET.download("2025-07-28", "2025-08-01", product_type=[4])
+    groups = TOLNET.group(ds)
+    TOLNET.plot_curtain(groups[next(iter(groups))], show=True)

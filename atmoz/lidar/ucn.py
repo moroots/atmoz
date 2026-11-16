@@ -60,6 +60,7 @@ LARGE_MEMORY_MB = 2000.0
 _AVAILABILITY_MAX_AGE = timedelta(hours=6)
 
 _gate = threading.Lock()
+_netcdf_lock = threading.Lock()   # the HDF5 library under netCDF4 is not thread-safe: read one file at a time (downloads stay parallel)
 _last_request = [0.0]
 
 
@@ -206,7 +207,7 @@ class UCN:
         """NetCDF -> one parquet file (atomic). Profile variables become list columns; labels go in the metadata."""
         import xarray as xr
 
-        with xr.open_dataset(nc_path) as raw:
+        with _netcdf_lock, xr.open_dataset(nc_path) as raw:
             ds = raw.load()
         table = cls._to_table(job, ds)
         part = dest.with_name(f"{dest.name}.{os.getpid()}-{threading.get_ident()}.part")

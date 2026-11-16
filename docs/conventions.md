@@ -34,5 +34,5 @@ The same helper runs steps 3-4 for every source: `atmoz.resources.utilities.run_
 
 ## Status
 
-`TOLNET` already uses `download()` / `fetch()`, but it is stateful (results land in `self.data` and the method returns `self`).
-It will return an `atmoz_dataset` like the surface sources when the lidar module is next reworked.
+AirNow API, EPA AQS, TOLNet and UCN follow this process and return an `atmoz_dataset` with `.data == {name: DataFrame}`
+and a dict in `.metadata`. GEOS-CF is next.

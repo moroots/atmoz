@@ -61,9 +61,8 @@ dataset.frame, dataset.metadata["sites"]
 ```python
 from atmoz.lidar import TOLNET            # pip install "atmoz[lidar]"
 
-tolnet = TOLNET()
-tolnet.download(min_date="2025-07-28", max_date="2025-08-01", product_type=[4], processing_type=[1])
-tolnet.tolnet_curtains()
+ds = TOLNET.download("2025-07-28", "2025-08-01", product_type=[4], processing_type=[1])   # an atmoz_dataset
+TOLNET.plot_curtains(ds)                                                                     # one curtain per instrument
 ```
 
 ## Credentials and caching
