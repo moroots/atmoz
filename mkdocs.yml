@@ -16,4 +16,5 @@ nav:
   - Lidar (TOLNet, UCN): lidar.md
   - Models (GEOS-CF): models.md
   - Collocation: collocation.md
+  - Meteorology: met.md
   - Plotting: plotting.md

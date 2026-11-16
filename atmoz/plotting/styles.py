@@ -244,6 +244,12 @@ styles.register(atmoz_style.replace(
 ))
 
 styles.register(atmoz_style.replace(
+    name="skewt",
+    figsize=(6.5, 6.5),
+    description="Skew-T log-p diagrams (MetPy).",
+))
+
+styles.register(atmoz_style.replace(
     name="windrose",
     figsize=(7.2, 5.6),
     rc={**_BASE_RC, "axes.grid": True, "axes.spines.top": True, "axes.spines.right": True},
