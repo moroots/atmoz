@@ -176,7 +176,7 @@ def test_half_specified_range_is_rejected():
         AirNowAPI.download(start_date="2020-01-01", api_key=KEY)
 
 
-def test_download_returns_atmoz_dataset_one_frame_per_site_and_parameter(fake_http):
+def test_download_returns_atmoz_dataset_with_one_frame_per_site_and_parameter(fake_http):
     h = fake_http(lambda url, **kw: FakeResponse(200, json_data=[obs("2020-01-01T00:00")]))
     ds = dl(h, KEY, "2020-01-01", "2020-01-01", silent=True, use_cache=False)
     assert isinstance(ds, AtmozDataset) and list(ds) == ["840110010043/OZONE"]

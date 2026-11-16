@@ -399,7 +399,7 @@ class EPA_PreGen:
 
     Public entry points:
 
-    * :meth:`download` -> :class:`~atmoz.atmoz_dataset` (``.data`` is ``{csv_name: DataFrame}``)
+    * :meth:`download` -> :class:`~atmoz.AtmozDataset` (one frame per site and parameter)
     * :meth:`fetch`    -> ``{csv_name: zip_path}`` (files only, parse them yourself)
 
     Notes:

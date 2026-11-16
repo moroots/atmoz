@@ -4,7 +4,7 @@ Each source follows the same process, with the same names (see ``docs/convention
 
     _validate -> _url -> _fetch_one -> _parse_one -> (_load_one) -> _assemble
 
-and the same two public entry points: ``download()`` (returns an ``atmoz_dataset``) and
+and the same two public entry points: ``download()`` (returns an ``AtmozDataset``) and
 ``fetch()`` (raw files on disk, no parsing). The parts that are identical for every
 source (thread pool, all-or-nothing failure, shared HTTP sessions) live here.
 """

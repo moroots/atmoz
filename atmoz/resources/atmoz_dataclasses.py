@@ -235,23 +235,6 @@ class LidarProfiles:
     def plot(self, plot_type: str, ax: Optional[plt.Axes] = None, **kwargs):
         pass
 
-@dataclass 
-class atmoz_dataset:
-    __module__ = "atmoz"
-    data: Dict[str, Any] = field(default_factory=dict, repr=False)
-    metadata: Dict[str, Any] = field(default_factory=dict, repr=False)
-    datatype: str = field(default="unknown", repr=True)
-
-    @property
-    def frame(self) -> pd.DataFrame:
-        """The only DataFrame in ``data`` (a shortcut for single-frame results such as one AirNow query)."""
-        frames = [v for v in self.data.values() if isinstance(v, pd.DataFrame)]
-        if len(frames) != 1:
-            raise ValueError(f"`.frame` needs exactly one DataFrame in `.data`, found {len(frames)}: use `.data[name]`.")
-        return frames[0]
-
-
-
 # if __name__ == "__main__":
 #     # Usage example:
 #     import h5py
