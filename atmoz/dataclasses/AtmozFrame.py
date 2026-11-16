@@ -24,7 +24,8 @@ import pandas as pd
 AXES = ("lat", "lon", "alt")
 
 # Spellings normalised on construction: volume mixing ratios are stored as ppb / ppm / ppt.
-UNIT_ALIASES: Dict[str, str] = {"ppbv": "ppb", "ppmv": "ppm", "pptv": "ppt", "degC": "°C"}
+UNIT_ALIASES: Dict[str, str] = {"ppbv": "ppb", "ppmv": "ppm", "pptv": "ppt", "degC": "°C", "percent": "%", "mps": "m/s",
+                                "Pascal": "Pa", "degrees": "deg", "mMSL": "m", "mAGL": "m", "uA": "µA"}
 
 _KNOWN_UNITS: frozenset = frozenset({
     "1", "%", "s", "min", "h", "d",
@@ -36,7 +37,7 @@ _KNOWN_UNITS: frozenset = frozenset({
     "kg/m3", "g/m3", "mg/m3", "µg/m3", "molecules/cm3",
     "mol/mol", "ppm", "ppb", "ppt",
     "m/s", "km/h", "kn",
-    "km^-1.sr^-1", "1/(km sr)",
+    "km^-1.sr^-1", "1/(km sr)", "mPa", "DU", "µA", "mA", "V",
     "deg", "rad",
     "W/m2", "W/m²", "J/m2", "J/m²",
 })
