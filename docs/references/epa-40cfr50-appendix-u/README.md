@@ -1,7 +1,7 @@
 # EPA ozone NAAQS data handling: 40 CFR Part 50, Appendix U
 
 The authoritative rules for computing 8-hour averages and the daily maximum 8-hour average (MDA8) for ozone.
-This is the spec for the MDA8 function planned for `atmoz.surface` utilities.
+This is the spec for `atmoz.surface.mda8` (implemented and tested against these rules; see `tests/test_mda8.py`).
 
 | File | What it is |
 |---|---|

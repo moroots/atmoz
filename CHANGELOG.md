@@ -9,6 +9,8 @@ All notable changes to atmoz are documented here. The format follows
 Work after the 0.1.0 commit (planned as 0.1.1).
 
 ### Added
+- `atmoz.surface.mda8` / `mda8_aqs`: ozone 8-hour averages and the daily maximum 8-hour average (MDA8) per EPA 40 CFR 50 Appendix U
+  (truncation, 6-of-8 and 0.567 ppm sum rules, 17 windows, 13-of-17 day validity, exceptional events, collocated monitors).
 - `atmoz.lidar.UCN`: Unified Ceilometer Network (Hampton University) data, levels L2 (default) and L3, one file per
   ceilometer per UTC day. `UCN.download()` returns an `atmoz_dataset` of DataFrames (one row per time step, profile variables
   as list columns), `UCN.fetch()` the cached parquet paths, `UCN.available()` a size preview, `UCN.sites()` the ceilometer list,
@@ -27,7 +29,7 @@ Work after the 0.1.0 commit (planned as 0.1.1).
   identifies itself as `atmoz/<version>`.
 - Extras: `plots` (plotly, windrose, geopandas, shapely); `lidar` now includes `xarray` and `netcdf4`.
 - `docs/conventions.md` (the package-wide process and naming), `docs/plotting.md`, and `docs/references/epa-40cfr50-appendix-u/`:
-  the EPA rules for 8-hour ozone averages and the daily maximum (the spec for a planned MDA8 function), as text and JSON.
+  the EPA rules for 8-hour ozone averages and the daily maximum (the spec for `atmoz.surface.mda8`), as text and JSON.
 - GitHub Actions CI (`.github/workflows/ci.yml`) next to the GitLab CI; test notebooks in `dev/notebooks/`.
 - Tests for UCN, plotting, unit conversion and the GEOS-CF cache.
 

@@ -227,6 +227,43 @@ files = AirNowAPI.fetch("2025-08-01", "2025-08-31", output_dir="./data")
 
 ---
 
+## `mda8` — Ozone 8-hour averages and the daily maximum (MDA8)
+
+Implements the EPA's rules (40 CFR Part 50, Appendix U; the spec is in `docs/references/epa-40cfr50-appendix-u/`). Core install, no extras.
+
+```python
+from atmoz.surface import mda8, mda8_aqs
+
+# Every site of an EPA AQS hourly ozone file (parameter 44201, ppm); one row per site and day
+ds = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2024)
+daily = mda8_aqs(ds.data["hourly_44201_2024.csv"])
+daily[daily["valid"]].groupby(["State Code", "County Code", "Site Num"])["mda8"].nlargest(4)   # for a design value
+
+# One site, any hourly Series (AirNow API data is in ppb; a UTC index needs the site's standard-time offset)
+r = mda8(series_ppb, units="ppb", utc_offset=-5)
+```
+
+`mda8(series, *, units="ppb", utc_offset=None, exceptional_events=None, level_ppb=70)` returns a DataFrame indexed by local `date`:
+
+| Column | Meaning |
+|--------|---------|
+| `mda8` | Highest of the 17 eight-hour averages starting 07:00 to 23:00 local standard time, truncated, in the units of the input (NaN if no average is valid). |
+| `n_averages` | How many of the 17 averages are valid (exceptional-event hours count as present). |
+| `valid` | The day meets the completeness rule: at least 13 of 17 averages, **or** `mda8` above 70 ppb. Filter on this before computing design values. |
+| `start_hour` | Start hour (7-23) of the 8-hour period that gave the maximum. |
+
+Rules applied: hourly values truncated to whole ppb (3 decimals in ppm); an 8-hour average needs 6 of 8 hours (divisor 6, 7 or 8); with 5 or
+fewer it is valid only if the sum of the available hours exceeds 567 ppb; averages are truncated and stored at their start hour. Hours are
+**hour-beginning local standard time**, never daylight saving: AQS's `Date Local` / `Time Local` already are, and for a timezone-aware index you pass
+`utc_offset` (e.g. `-5` for US Eastern all year). Collocated monitors (POCs) are combined per site as EPA 2(b) says
+(`combine_collocated`: the primary POC, default the lowest number, with gaps filled by the mean of the others; pass `primary={site_tuple: poc}`
+to `mda8_aqs` if you know it). `mda8_aqs` takes column names (`value`, `date`, `hour`, `site`, `poc`) and `units` (default `"ppm"`).
+
+Not included: exceptional-event flags are not read from AQS qualifiers (pass `exceptional_events=` yourself), and the design value
+(annual fourth-highest MDA8, 3-year average) is not computed.
+
+---
+
 ## `utilities` — Data Processing Helpers
 
 ```python

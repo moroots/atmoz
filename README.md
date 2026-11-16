@@ -17,7 +17,7 @@ and lighter design. It is a dev / science tool: it makes common things fast and 
 
 ## Features
 
-* **EPA surface air quality** (`atmoz.surface`): the live **AirNow** API and the bulk **EPA AQS** yearly files.
+* **EPA surface air quality** (`atmoz.surface`): the live **AirNow** API and the bulk **EPA AQS** yearly files. `mda8` / `mda8_aqs` compute ozone 8-hour averages and the daily maximum (MDA8) per EPA rules.
   Streamed to a disk cache, parsed with Arrow's multi-threaded CSV reader (full-precision `float64`
   coordinates, `category` text columns), downloaded in parallel, all-or-nothing on failure.
 * **TOLNet ozone lidar** (`atmoz.lidar`): query, download and plot NASA TOLNet profiles.
