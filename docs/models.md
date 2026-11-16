@@ -32,48 +32,38 @@ See the [conventions](conventions.md): it works like every other atmoz source.
 
 ---
 
-## Collections (`_COLLECTION_CATALOG`)
+## Collections
 
-Three collections are available. Pass the collection name as the `collection` argument to `download()` / `fetch()`.
+Pass the collection name as the `collection` argument to `download()` / `fetch()`. `GEOS_CF.catalog` has the full dict (URLs, variables).
 
-| Collection | Description | Variables | Levels | Units |
-|------------|-------------|-----------|--------|-------|
-| `aqc` | Surface air quality — 1-hr avg | `o3`, `no2`, `co`, `so2`, `pm25_rh35_gcc` | 1 (surface only) | mol/mol (gas), µg/m³ (PM2.5) |
-| `chm` | Chemistry profiles — 1-hr avg | `o3`, `no2`, `co`, `so2`, `oh`, `hno3` | 72 model levels | mol/mol |
-| `met` | Surface meteorology — 1-hr avg | `t2m`, `u10m`, `v10m`, `q2m`, `zpbl`, `ps` | surface | K, m/s, kg/kg, Pa |
+| Collection | Description | Default variables | Levels | Period |
+|------------|-------------|-------------------|--------|--------|
+| `aqc` | Surface air quality, 1-hr average | `o3`, `no2`, `co`, `so2`, `pm25_rh35_gcc` | surface | 2018 to present (also `fcast`) |
+| `chm` | Chemistry **profiles**, 1-hr average, 50+ species | `o3`, `no2`, `co`, `so2`, `hno3` | lowest **36 model levels** (`lev` 37 = highest ... 72 = surface layer) | 2020 to present |
+| `chm_sfc` | Surface chemistry, 1-hr average, 50+ species | same | surface | 2018 to present |
+| `met` | Surface meteorology, 1-hr average | `t2m`, `u10m`, `v10m`, `q2m`, `zpbl`, `ps` | surface | 2018 to present |
+| `met3d` | Meteorology on the same 36 levels as `chm` | `zl` (layer height, m) | 36 model levels | 2020 to present |
+
+Any variable the server has can be requested (`chm` / `chm_sfc` / `met3d` have many more): an unknown name fails the request and lists
+what is available. Pair a `chm` profile with `met3d`'s `zl` to get altitudes for the `lev` columns.
 
 ### Modes
 
 | Mode | Description | Date range |
 |------|-------------|------------|
-| `assim` | Replay/assimilation — meteorology nudged to observations | 2018–2026 |
-| `fcast` | 5-day rolling forecast — updated each day | Recent dates only |
+| `assim` | Replay/assimilation (historical) | see the table |
+| `fcast` | The server's rolling 5-day forecast (`.latest` dataset) | the next days only |
 
-`aqc` supports both `assim` and `fcast`. `chm` and `met` are `assim` only.
+Only `aqc` has `fcast`; asking for it on another collection raises `ValueError`.
 
-### Variable reference
+### Variable reference (defaults)
 
 | Variable | Collection | Units | Description |
 |----------|------------|-------|-------------|
-| `o3` | aqc, chm | mol/mol | Ozone |
-| `no2` | aqc, chm | mol/mol | Nitrogen dioxide |
-| `co` | aqc, chm | mol/mol | Carbon monoxide |
-| `so2` | aqc, chm | mol/mol | Sulfur dioxide |
+| `o3`, `no2`, `co`, `so2`, `hno3` | aqc, chm, chm_sfc | mol/mol (ppbv by default) | Gas mixing ratios |
 | `pm25_rh35_gcc` | aqc | µg/m³ | PM2.5 at 35% RH |
-| `oh` | chm | mol/mol | Hydroxyl radical |
-| `hno3` | chm | mol/mol | Nitric acid |
-| `t2m` | met | K | 2-m air temperature |
-| `u10m` | met | m/s | 10-m zonal wind |
-| `v10m` | met | m/s | 10-m meridional wind |
-| `q2m` | met | kg/kg | 2-m specific humidity |
-| `zpbl` | met | m | Planetary boundary layer height |
-| `ps` | met | Pa | Surface pressure |
-
-### Inspect the catalog in code
-
-```python
-GEOS_CF.catalog["aqc"]["variables"]      # the full dict: collections, variables, OPeNDAP URLs
-```
+| `t2m`, `u10m`, `v10m`, `q2m`, `zpbl`, `ps` | met | K, m/s, m/s, kg/kg, m, Pa | 2-m temperature, 10-m winds, 2-m humidity, boundary-layer height, surface pressure |
+| `zl` | met3d | m | Mid-layer height of each model level |
 
 ---
 
@@ -83,16 +73,17 @@ GEOS_CF.catalog["aqc"]["variables"]      # the full dict: collections, variables
 
 | Collection | `ds.data` | Each DataFrame |
 |------------|-----------|----------------|
-| `aqc`, `met` (surface) | `{"aqc_assim": DataFrame}` | UTC `time` index, one column per variable |
-| `chm` (profiles) | `{"chm_assim_o3": DataFrame, ...}` | UTC `time` index, one column per model level (`lev`), one frame per variable |
+| `aqc`, `chm_sfc`, `met` (surface) | `{"aqc_assim": DataFrame}` | UTC `time` index, one column per variable |
+| `chm`, `met3d` (profiles) | `{"chm_assim_o3": DataFrame, ...}` | UTC `time` index, one column per model level (`lev`), one frame per variable |
 
 `ds.metadata` has `lat` / `lon` (the 0.25° grid cell actually used), `lat_requested` / `lon_requested`, `units`, `start`, `end`,
 `collection`, `mode`. Each DataFrame's `.attrs` repeats the grid cell and the units. A profile frame has the same shape the
 TOLNet curtain plot takes (time index, level columns), so it can be plotted next to a lidar curtain.
 
-**Units.** The server gives gas species (`o3`, `no2`, `co`, `so2`, `oh`, `hno3`) in mol/mol. `download()` converts them to
-**ppbv** by default; pass `units="mol/mol"` for the raw values. PM2.5 (`pm25_rh35_gcc`, µg/m³) and the met variables
-(K, m/s, kg/kg, m, Pa) are never converted. `fetch()` files are always raw.
+**Times** are the middle of each hourly average (`00:30`, `01:30`, ...), UTC.
+
+**Units.** The server gives gas species (`o3`, `no2`, `no`, `co`, `so2`, `hno3`, `nh3`, `hcho`, `ch4`, `isop`, `pan`, `h2o2`) in mol/mol. `download()` converts them to
+**ppbv** by default; pass `units="mol/mol"` for the raw values. Every other variable (PM2.5 in µg/m³, the met variables, other species) is returned as served. `fetch()` files are always raw.
 
 ---
 
@@ -109,7 +100,7 @@ ds = GEOS_CF.download(
 |----------|------|---------|-------------|
 | `lat`, `lon` | `float` | required | Site, decimal degrees. The nearest 0.25° grid cell is used. |
 | `start_date`, `end_date` | `str \| date` | required | Inclusive UTC days: `"YYYY-MM-DD"`, `"YYYYMMDD"`, `date` or `datetime`. |
-| `collection` | `str` | `"aqc"` | `"aqc"`, `"chm"` or `"met"`. |
+| `collection` | `str` | `"aqc"` | `"aqc"`, `"chm"`, `"chm_sfc"`, `"met"` or `"met3d"`. |
 | `mode` | `str` | `"assim"` | `"assim"` (historical) or `"fcast"` (forecast, `aqc` only). |
 | `variables` | `list[str]` | collection defaults | Lower-case names; an unknown one fails the request. |
 | `units` | `str` | `"ppbv"` | `"ppbv"` or `"mol/mol"` (see above). |
@@ -120,10 +111,13 @@ ds = GEOS_CF.download(
 **Raises** `ValueError` for a bad request (before any network call) and `DownloadError` if any month fails; nothing is returned,
 but finished months stay cached.
 
-### Monthly requests
+### Monthly requests and a flaky server
 
-The OPeNDAP server caps the size of a time slice, so a range is split into calendar months, one request each. A month can take
-around a minute depending on server load, so a full year for one site may take 10+ minutes the first time (and is instant afterwards).
+The OPeNDAP server caps the size of a time slice, so a range is split into calendar months, one request each. Measured live: about 15 s
+for two days of `aqc`, about 1 min for one day of 36-level `chm`, so a year of profiles takes a long while the first time (and is instant
+afterwards). The NASA server regularly answers `502 Proxy Error` / "DAP server error", so each request is retried 4 times with a growing pause
+before it fails the download. Its time axis (GrADS, `days since 1-1-1`) is rebuilt from the axis' own attributes, because xarray cannot decode
+it and the transferred values were seen damaged.
 
 ### Cache
 

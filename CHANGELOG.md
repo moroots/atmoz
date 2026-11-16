@@ -16,7 +16,7 @@ Work after the 0.1.0 commit (planned as 0.1.1).
   as list columns), `UCN.fetch()` the cached parquet paths, `UCN.available()` a size preview, `UCN.sites()` the ceilometer list,
   `UCN.stack()` / `UCN.backscatter()` helpers. The cache keeps one compact parquet file per day (about half the NetCDF size).
   Gentle on the server (2 workers, request pacing, `atmoz/<version>` User-Agent, never re-downloads final days) and bounded:
-  requests over ~1 GB raise `RequestTooLargeError` unless `allow_large=True`. L0b (raw 16 s profiles) is planned: `level="L0b"` raises a clear error and `UCN.planned_levels` lists it.
+  requests over ~1 GB raise `RequestTooLargeError` unless `allow_large=True`. Verified against the live server (first download and conversion). L0b (raw 16 s profiles) is planned: `level="L0b"` raises a clear error and `UCN.planned_levels` lists it.
 - `atmoz.plot` / `atmoz.plotting`: opinionated plots with one entry point. `az.plot("curtain", df)` and
   `az.plot.curtain(df)` are the same call; `curtain`, `profile`, `windrose` (windrose) and `site_map` (plotly) so far.
   Matplotlib plots return `(fig, ax)`; plotly plots return the `Figure`. Unknown names suggest the closest match.
@@ -39,7 +39,11 @@ Work after the 0.1.0 commit (planned as 0.1.1).
   Gas species are converted to ppbv by default (`units="mol/mol"` keeps the raw values). `GEOS_CF.fetch(...)` fills the cache and returns
   `{file_name: parquet_path}`. The cache is one parquet file per month (assimilation data older than two weeks is final; newer data and
   forecasts expire after three hours), and a bad variable or any failed month raises instead of printing a warning. Removed: the stateful
-  `GEOS_CF().fetch()` / `.data`, `force_download` (use `refresh=True`) and `add_altitude_coords`.
+  `GEOS_CF().fetch()` / `.data`, `force_download` (use `refresh=True`) and `add_altitude_coords` (get `zl` from the new `met3d` collection instead).
+  Checked against the live server: `chm` now points at the real profile product (36 model levels; the old URL was surface-only), `chm_sfc`,
+  `met3d` are new, the forecast uses the `.latest` dataset (the old URL was a directory), the non-existent `oh` is gone from the defaults, the
+  server's GrADS time axis is decoded from its attributes (xarray decoded it wrongly and the values can arrive damaged), and requests are retried
+  because the server often answers 502.
 - **TOLNet consolidated into `atmoz/lidar/tolnet.py`** and brought in line with the conventions. `TOLNET.download()` / `fetch()` are classmethods;
   `download()` returns an `atmoz_dataset` (`.data == {file_name: DataFrame}`, per-file metadata in `.metadata["info"]`) instead of filling `self.data`,
   uses the shared session pool and file cache, and is all-or-nothing (`DownloadError`; `NoDataError` when nothing matches).
@@ -59,7 +63,6 @@ Work after the 0.1.0 commit (planned as 0.1.1).
   `_parameters_validator` is `EPA_PreGen._validate`. Dead state (`_data`, `_queries_strings`, `_process`, `_nest`) is removed.
 - **Package-wide naming** (see `docs/conventions.md`): every source has `download()` and `fetch()`; `TOLNET.import_data()` is now
   `TOLNET.download()` and `TOLNET.download()` (to disk) is now `TOLNET.fetch()`.
-- GEOS-CF `fetch()` caches NetCDF results in the shared atmoz cache by default (`use_cache=False` to opt out; `cache_dir=` still overrides).
 - `TOLNET.plot_curtain`, `makePlots.vertical_profile`, `plot_curtain`, `plot_wind_rose` now return `(fig, ax)` and no
   longer call `plt.show()`/`plt.close()`; pass `show=True` to `TOLNET.plot_curtain` for the old behaviour in scripts.
   `makePlots.site_map` returns the plotly figure instead of showing it.
@@ -75,10 +78,8 @@ Work after the 0.1.0 commit (planned as 0.1.1).
 - `colorbars.tolnet_ozone` no longer uses the deprecated `set_under` / `set_over`.
 
 ### Known issues
-- GEOS-CF has been tested offline only; its first live download (OPeNDAP monthly requests, level ordering of `chm`) is not verified yet.
 - AirNow window logic assumes the API returns the `endDate` hour (inclusive); see `AirNowAPI.window_end_inclusive`. Not yet checked with a live key.
 - `EPA_PARAMETERS` (which parameter has which resolutions) has not been re-checked against EPA's current file list.
-- The UCN download path has been tested offline and on cached files, but its first-time download and conversion have not been run against the live server.
 
 ## [0.1.0] - 2026-11-12
 

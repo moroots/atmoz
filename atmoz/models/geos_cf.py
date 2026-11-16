@@ -14,12 +14,14 @@ Data access: https://opendap.nccs.nasa.gov/dods/gmao/geos-cf/
 from __future__ import annotations
 
 import hashlib
+import re
 import threading
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Sequence, Tuple, Union
 
+import numpy as np
 import pandas as pd
 import xarray as xr
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -38,30 +40,44 @@ _COLLECTION_CATALOG: Dict[str, dict] = {
     "aqc": {
         "urls": {
             "assim": f"{_OPENDAP_BASE}/assim/aqc_tavg_1hr_g1440x721_v1",
-            "fcast": f"{_OPENDAP_BASE}/fcast/aqc_tavg_1hr_g1440x721_v1",
+            "fcast": f"{_OPENDAP_BASE}/fcast/aqc_tavg_1hr_g1440x721_v1.latest",   # the rolling 5-day forecast
         },
         "variables": ["o3", "no2", "co", "so2", "pm25_rh35_gcc"],
         "description": "Surface air quality, 1-hr average (2018 to present)",
     },
     "chm": {
+        "urls": {"assim": f"{_OPENDAP_BASE}/assim/chm_tavg_1hr_g1440x721_v36"},
+        "variables": ["o3", "no2", "co", "so2", "hno3"],
+        "description": "Chemistry profiles on the lowest 36 model levels (37 = highest ... 72 = surface), 1-hr average (2020 to present); 50+ species",
+    },
+    "chm_sfc": {
         "urls": {"assim": f"{_OPENDAP_BASE}/assim/chm_tavg_1hr_g1440x721_v1"},
-        "variables": ["o3", "no2", "co", "so2", "oh", "hno3"],
-        "description": "Chemistry profiles, 1-hr average, 72 model levels (2018 to present)",
+        "variables": ["o3", "no2", "co", "so2", "hno3"],
+        "description": "Surface chemistry, all 50+ species, 1-hr average (2018 to present)",
     },
     "met": {
         "urls": {"assim": f"{_OPENDAP_BASE}/assim/met_tavg_1hr_g1440x721_x1"},
         "variables": ["t2m", "u10m", "v10m", "q2m", "zpbl", "ps"],
         "description": "Surface meteorology, 1-hr average (2018 to present)",
     },
+    "met3d": {
+        "urls": {"assim": f"{_OPENDAP_BASE}/assim/met_tavg_1hr_g1440x721_v36"},
+        "variables": ["zl"],
+        "description": "Meteorology on the same 36 model levels as `chm` (zl = layer height in m, t, u, v, q, rh, ...), 1-hr average (2020 to present)",
+    },
 }
 
-# Raw units on the server. Gas mixing ratios are mol/mol; ``units="ppbv"`` (the default) multiplies them by 1e9.
-_GASES = {"o3", "no2", "co", "so2", "oh", "hno3"}
+# Gas mixing ratios are served as mol/mol; ``units="ppbv"`` (the default) multiplies these by 1e9. Anything else is returned as served.
+_GASES = {"o3", "no2", "no", "co", "so2", "hno3", "nh3", "hcho", "ch4", "isop", "pan", "h2o2"}
 _NATIVE_UNITS = {"pm25_rh35_gcc": "ug/m3", "t2m": "K", "u10m": "m/s", "v10m": "m/s", "q2m": "kg/kg", "zpbl": "m", "ps": "Pa",
-                 **{g: "mol/mol" for g in _GASES}}
+                 "zl": "m", "t": "K", "u": "m/s", "v": "m/s", "q": "kg/kg", "rh": "1", **{g: "mol/mol" for g in _GASES}}
 
 # the HDF5 / netCDF-C libraries underneath xarray are not thread-safe: talk to the server one request at a time
 _netcdf_lock = threading.Lock()
+
+# The NASA server often answers 502 / "DAP server error" or returns a damaged time axis: retry with a growing pause.
+_RETRIES = 4
+_RETRY_DELAY = 3.0   # seconds before the first retry (doubles each time)
 
 _FINAL_AFTER = timedelta(days=14)    # assimilation chunks this old are final (cached forever)
 _RECENT_MAX_AGE = timedelta(hours=3)  # newer chunks, and forecasts, are re-downloaded after this long
@@ -77,7 +93,7 @@ class GEOS_CF_QUERY(BaseModel):
     lon: float = Field(ge=-180, le=180)
     start_date: str
     end_date: str
-    collection: Literal["aqc", "chm", "met"] = Field(default="aqc")
+    collection: Literal["aqc", "chm", "chm_sfc", "met", "met3d"] = Field(default="aqc")
     mode: Literal["assim", "fcast"] = Field(default="assim")
     variables: Optional[List[str]] = Field(default=None)
 
@@ -114,6 +130,40 @@ def _monthly_chunks(start: str, end: str) -> List[Tuple[str, str]]:
         chunks.append((max(pd.Timestamp(start), period.start_time).strftime("%Y-%m-%d"),
                        min(pd.Timestamp(end), period.end_time).strftime("%Y-%m-%d")))
     return chunks
+
+
+_GRADS_START = re.compile(r"(\d{2})(?::(\d{2}))?z(\d{2})([a-z]{3})(\d{4})", re.I)
+_GRADS_STEP = re.compile(r"(\d+)\s*(mn|hr|dy)", re.I)
+_STEP_MINUTES = {"mn": 1, "hr": 60, "dy": 1440}
+
+
+def _decode_time(time: "xr.DataArray") -> pd.DatetimeIndex:
+    """The server's GrADS time axis -> UTC-naive timestamps.
+
+    The raw axis is ``days since 1-1-1`` (ambiguous: xarray decodes it into a broken Julian/Gregorian calendar), and the values
+    are sometimes damaged in transit (seen live on ``met3d``: out-of-order entries). A GrADS axis is *linear*, so it is rebuilt
+    from its own attributes: ``minimum`` (e.g. ``00:30z01jan2018``, the first step), ``grads_step`` (``60mn``) and ``grads_size``.
+    The transferred values are only used when those are missing, and are then checked. Already-decoded axes pass through.
+    """
+    if pd.api.types.is_datetime64_any_dtype(time.dtype):
+        return pd.DatetimeIndex(time.values)
+    m = _GRADS_START.fullmatch(str(time.attrs.get("minimum", "")).strip())
+    if not m:
+        raise ValueError(f"Cannot decode the server's time axis (units={time.attrs.get('units')!r}, "
+                         f"minimum={time.attrs.get('minimum')!r}).")
+    hh, mm, dd, mon, yyyy = m.groups()
+    start = pd.Timestamp(f"{yyyy}-{mon.title()}-{dd} {hh}:{mm or '00'}")
+    n = time.sizes["time"] if "time" in time.sizes else len(time)
+
+    step = _GRADS_STEP.fullmatch(str(time.attrs.get("grads_step", "")).strip())
+    if step and str(time.attrs.get("grads_mapping", "linear")).lower() == "linear" and str(time.attrs.get("grads_size", n)) == str(n):
+        minutes = int(step.group(1)) * _STEP_MINUTES[step.group(2).lower()]
+        return start + pd.to_timedelta(np.arange(n) * minutes, unit="min")
+
+    days = time.values.astype("float64")
+    if not (np.isfinite(days).all() and (np.diff(days) > 0).all() and days[-1] - days[0] < 366 * 60):
+        raise OSError("The server returned a damaged time axis (not finite, increasing and within 60 years).")
+    return start + pd.to_timedelta(np.round((days - days[0]) * 1440.0), unit="min")
 
 
 def _snap(value: float) -> float:
@@ -170,19 +220,32 @@ class GEOS_CF:
         return final or (time.time() - path.stat().st_mtime) < _RECENT_MAX_AGE.total_seconds()
 
     @classmethod
+    def _download_chunk(cls, job: dict) -> "xr.Dataset":
+        """The server side of one job: nearest grid cell, the job's days, only the requested variables (retried)."""
+        delay = _RETRY_DELAY
+        for attempt in range(_RETRIES):
+            try:
+                with _netcdf_lock, xr.open_dataset(cls._url(job), engine="netcdf4", decode_times=False) as ds:
+                    site = ds.sel(lat=job["lat"], lon=job["lon"], method="nearest")
+                    missing = [v for v in job["variables"] if v not in site.data_vars]
+                    if missing:
+                        raise ValueError(f"{missing} not in {job['collection']}/{job['mode']}. "
+                                         f"Available: {sorted(site.data_vars)}")
+                    site = site.assign_coords(time=_decode_time(site["time"]))
+                    return site[job["variables"]].sel(time=slice(job["start"], job["end"])).load()
+            except (OSError, OverflowError, pd.errors.OutOfBoundsTimedelta, pd.errors.OutOfBoundsDatetime):
+                if attempt == _RETRIES - 1:
+                    raise
+                time.sleep(delay)
+                delay *= 2
+
+    @classmethod
     def _fetch_one(cls, job: dict, *, dest_dir: Path, refresh: bool, use_cache: bool) -> Path:
         """One job (one month) -> a tidy parquet file: columns ``time``, [``lev``], ``lat``, ``lon`` and the variables."""
         dest = dest_dir / cls._name(job)
         if use_cache and not refresh and cls._is_fresh(dest, job):
             return dest
-        with _netcdf_lock:
-            with xr.open_dataset(cls._url(job), engine="netcdf4") as ds:
-                site = ds.sel(lat=job["lat"], lon=job["lon"], method="nearest")
-                missing = [v for v in job["variables"] if v not in site.data_vars]
-                if missing:
-                    raise ValueError(f"{missing} not in {job['collection']}/{job['mode']}. "
-                                     f"Available: {sorted(site.data_vars)}")
-                chunk = site[job["variables"]].sel(time=slice(job["start"], job["end"])).load()
+        chunk = cls._download_chunk(job)
         df = chunk.to_dataframe().reset_index()
         if df.empty:
             raise ValueError(f"The server returned no data for {job['start']} .. {job['end']}.")
@@ -241,7 +304,7 @@ class GEOS_CF:
                  start_date: Union[str, date, datetime],
                  end_date: Union[str, date, datetime],
                  *,
-                 collection: Literal["aqc", "chm", "met"] = "aqc",
+                 collection: Literal["aqc", "chm", "chm_sfc", "met", "met3d"] = "aqc",
                  mode: Literal["assim", "fcast"] = "assim",
                  variables: Optional[Sequence[str]] = None,
                  units: Literal["ppbv", "mol/mol"] = "ppbv",
@@ -303,7 +366,7 @@ class GEOS_CF:
               start_date: Union[str, date, datetime],
               end_date: Union[str, date, datetime],
               *,
-              collection: Literal["aqc", "chm", "met"] = "aqc",
+              collection: Literal["aqc", "chm", "chm_sfc", "met", "met3d"] = "aqc",
               mode: Literal["assim", "fcast"] = "assim",
               variables: Optional[Sequence[str]] = None,
               max_workers: int = 1,

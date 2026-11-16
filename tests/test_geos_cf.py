@@ -18,20 +18,70 @@ LONS = [-77.0, -76.75, -76.5]
 
 @pytest.fixture
 def opendap(monkeypatch):
-    """Fake the server: ``o3`` 1e-8 mol/mol everywhere (10 ppbv), ``lev`` of size 1 (aqc) or 3 (chm); records requests."""
+    """Fake the server: ``o3`` 1e-8 mol/mol everywhere (10 ppbv). Like the real one it serves a GrADS time axis
+    (``days since 1-1-1`` as raw floats plus a ``minimum`` attribute) and ``lev`` of size 1, or 3 for the 36-level products."""
     calls = []
 
-    def fake(url, engine=None):
+    def fake(url, engine=None, decode_times=True):
         calls.append(url)
-        lev = [1, 2, 3] if "chm_" in url else [1]
+        lev = [70.0, 71.0, 72.0] if "_v36" in url else [72.0]
         shape = (len(TIMES), len(lev), len(LATS), len(LONS))
         data = np.full(shape, 1e-8)
         data[:, :, :, :] += np.arange(len(lev))[None, :, None, None] * 1e-9   # level k adds k ppbv
-        return xr.Dataset({"o3": (("time", "lev", "lat", "lon"), data)},
-                          coords={"time": TIMES, "lev": lev, "lat": LATS, "lon": LONS})
+        if decode_times:
+            time = TIMES
+        else:
+            time = xr.DataArray(739_000.0 + np.arange(len(TIMES)) / 24.0, dims="time",
+                                attrs={"units": "days since 1-1-1 00:00:0.0", "minimum": "00z01jun2024"})
+        return xr.Dataset({"o3": (("time", "lev", "lat", "lon"), data), "zl": (("time", "lev", "lat", "lon"), data * 1e12)},
+                          coords={"time": time, "lev": lev, "lat": LATS, "lon": LONS})
 
     monkeypatch.setattr(g.xr, "open_dataset", fake)
     return calls
+
+
+def test_flaky_server_is_retried_then_succeeds(opendap, monkeypatch):
+    monkeypatch.setattr(g, "_RETRY_DELAY", 0.0)
+    real, state = g.xr.open_dataset, {"n": 0}
+
+    def flaky(url, **kw):
+        state["n"] += 1
+        if state["n"] <= 2:
+            raise OSError(-70, "NetCDF: DAP server error")
+        return real(url, **kw)
+
+    monkeypatch.setattr(g.xr, "open_dataset", flaky)
+    assert len(dl().data["aqc_assim"]) == 24 and state["n"] == 3
+
+
+def test_persistent_server_errors_raise_download_error_after_the_retries(opendap, monkeypatch):
+    monkeypatch.setattr(g, "_RETRY_DELAY", 0.0)
+    state = {"n": 0}
+
+    def down(url, **kw):
+        state["n"] += 1
+        raise OSError(-70, "NetCDF: DAP server error")
+
+    monkeypatch.setattr(g.xr, "open_dataset", down)
+    with pytest.raises(DownloadError, match="DAP server error"):
+        dl()
+    assert state["n"] == g._RETRIES
+
+
+def test_linear_grads_axis_is_rebuilt_from_its_attributes_not_the_damaged_values():
+    values = 739_000.0 + np.arange(5) / 24.0
+    values[2] = 146_465.3                                   # damaged in transit, as seen live on met3d
+    t = xr.DataArray(values, dims="time", attrs={"minimum": "00:30z01jan2020", "grads_mapping": "linear",
+                                                 "grads_step": "60mn", "grads_size": "5"})
+    assert g._decode_time(t).tolist() == list(pd.date_range("2020-01-01 00:30", periods=5, freq="h"))
+    daily = xr.DataArray(values, dims="time", attrs={"minimum": "00z05feb2021", "grads_step": "1dy", "grads_size": "5"})
+    assert g._decode_time(daily)[-1] == pd.Timestamp("2021-02-09")
+
+
+def test_damaged_time_axis_is_rejected():
+    bad = xr.DataArray([739_000.0, 1e20], dims="time", attrs={"minimum": "00z01jan2024"})
+    with pytest.raises(OSError, match="damaged"):
+        g._decode_time(bad)
 
 
 def dl(**kw):
@@ -61,9 +111,35 @@ def test_raw_units_and_grid_cell_metadata(opendap):
 def test_profiles_are_time_by_level_per_variable(opendap):
     ds = dl(collection="chm")
     prof = ds.data["chm_assim_o3"]
-    assert list(prof.columns) == [1, 2, 3] and len(prof) == 24
+    assert list(prof.columns) == [70.0, 71.0, 72.0] and len(prof) == 24
     assert prof.iloc[0].tolist() == pytest.approx([10.0, 11.0, 12.0])
     assert prof.attrs["units"] == "ppbv"
+
+
+def test_server_time_axis_is_decoded_from_the_grads_minimum(opendap):
+    df = dl(start="2024-06-02", end="2024-06-02").data["aqc_assim"]
+    assert df.index[0] == pd.Timestamp("2024-06-02 00:00", tz="UTC") and df.index[-1] == pd.Timestamp("2024-06-02 23:00", tz="UTC")
+
+
+def test_decode_time_handles_minutes_and_rejects_unknown_axes():
+    t = xr.DataArray(739_000.0 + np.array([0.0, 1.0, 2.0]) / 24.0, dims="time", attrs={"minimum": "00:30z01jan2018"})
+    assert g._decode_time(t).tolist() == list(pd.date_range("2018-01-01 00:30", periods=3, freq="h"))
+    with pytest.raises(ValueError, match="time axis"):
+        g._decode_time(xr.DataArray([1.0], dims="time", attrs={"units": "days since 1-1-1"}))
+
+
+def test_forecast_uses_the_latest_dataset_and_profile_sets_are_distinct(opendap):
+    dl(mode="fcast")
+    assert opendap[-1].endswith("aqc_tavg_1hr_g1440x721_v1.latest")
+    dl(collection="chm")
+    assert opendap[-1].endswith("chm_tavg_1hr_g1440x721_v36")
+    ds = dl(collection="chm_sfc")
+    assert opendap[-1].endswith("chm_tavg_1hr_g1440x721_v1") and list(ds.data) == ["chm_sfc_assim"]
+
+
+def test_layer_heights_come_back_as_a_time_by_level_frame_in_native_units(opendap):
+    zl = dl(collection="met3d", variables=["zl"]).data["met3d_assim_zl"]
+    assert zl.attrs["units"] == "m" and list(zl.columns) == [70.0, 71.0, 72.0]
 
 
 def test_request_spanning_months_is_one_request_per_month_and_sorted(opendap):
@@ -119,4 +195,4 @@ def test_bad_requests_are_rejected_before_any_request(opendap):
 
 
 def test_catalog_lists_collections():
-    assert set(GEOS_CF.catalog) == {"aqc", "chm", "met"} and "o3" in GEOS_CF.catalog["aqc"]["variables"]
+    assert set(GEOS_CF.catalog) == {"aqc", "chm", "chm_sfc", "met", "met3d"} and "o3" in GEOS_CF.catalog["aqc"]["variables"]
