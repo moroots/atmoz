@@ -61,7 +61,7 @@ def test_unknown_style_suggests_the_right_name():
 def test_plot_lists_itself():
     text = repr(plot)
     assert all(name in text for name in ("curtain", "profile", "windrose", "site_map"))
-    assert set(dir(plot)) == {"curtain", "profile", "windrose", "site_map"}
+    assert set(dir(plot)) == {"curtain", "profile", "windrose", "site_map", "skewt"}
 
 
 def test_import_is_light():

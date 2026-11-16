@@ -27,6 +27,7 @@ _LAZY = {
     "delete_secret": ("atmoz.resources.credentials", "delete_secret"),
     "plot": ("atmoz.plotting", "plot"),
     "plotting": ("atmoz.plotting", None),   # the submodule itself: atmoz.plotting.styles.curtain
+    "met": ("atmoz.met", None),             # the submodule itself (needs atmoz[met] when its functions are called)
     "cache_dir": ("atmoz.resources.cache", "cache_dir"),
     "cache_info": ("atmoz.resources.cache", "cache_info"),
     "clear_cache": ("atmoz.resources.cache", "clear_cache"),

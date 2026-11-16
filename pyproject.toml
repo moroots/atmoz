@@ -79,7 +79,11 @@ plots = [
     "geopandas>=0.13.2",
     "shapely>=2.0.7",
 ]
-all = ["atmoz[surface,lidar,models,nasa,legacy,plots]"]
+# Meteorology helpers (atmoz.met): potential temperature, dewpoint, PBL height, Skew-T.
+met = [
+    "metpy>=1.6",
+]
+all = ["atmoz[surface,lidar,models,nasa,legacy,plots,met]"]
 dev = [
     "pytest>=8",
     "pytest-cov",
