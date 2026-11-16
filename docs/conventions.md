@@ -1,6 +1,6 @@
 # Conventions
 
-Every data source in atmoz (AirNow API, EPA AQS files, TOLNet, and GEOS-CF once it is redesigned) follows the same
+Every data source in atmoz (AirNow API, EPA AQS files, TOLNet, UCN and GEOS-CF) follows the same
 process with the same names, so you only learn it once.
 
 ## Public entry points
@@ -34,5 +34,5 @@ The same helper runs steps 3-4 for every source: `atmoz.resources.utilities.run_
 
 ## Status
 
-AirNow API, EPA AQS, TOLNet and UCN follow this process and return an `atmoz_dataset` with `.data == {name: DataFrame}`
-and a dict in `.metadata`. GEOS-CF is next.
+AirNow API, EPA AQS, TOLNet, UCN and GEOS-CF follow this process and return an `atmoz_dataset` with `.data == {name: DataFrame}`
+and a dict in `.metadata`.

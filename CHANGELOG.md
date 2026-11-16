@@ -32,6 +32,12 @@ Work after the 0.1.0 commit (planned as 0.1.1).
 - Tests for UCN, plotting, unit conversion and the GEOS-CF cache.
 
 ### Changed
+- **GEOS-CF redesigned** to follow the conventions. `GEOS_CF.download(lat, lon, start, end, ...)` (classmethod) returns an `atmoz_dataset` of
+  DataFrames: surface collections (`aqc`, `met`) as one frame indexed by UTC time, `chm` profiles as one time x level frame per variable.
+  Gas species are converted to ppbv by default (`units="mol/mol"` keeps the raw values). `GEOS_CF.fetch(...)` fills the cache and returns
+  `{file_name: parquet_path}`. The cache is one parquet file per month (assimilation data older than two weeks is final; newer data and
+  forecasts expire after three hours), and a bad variable or any failed month raises instead of printing a warning. Removed: the stateful
+  `GEOS_CF().fetch()` / `.data`, `force_download` (use `refresh=True`) and `add_altitude_coords`.
 - **TOLNet consolidated into `atmoz/lidar/tolnet.py`** and brought in line with the conventions. `TOLNET.download()` / `fetch()` are classmethods;
   `download()` returns an `atmoz_dataset` (`.data == {file_name: DataFrame}`, per-file metadata in `.metadata["info"]`) instead of filling `self.data`,
   uses the shared session pool and file cache, and is all-or-nothing (`DownloadError`; `NoDataError` when nothing matches).
@@ -67,7 +73,7 @@ Work after the 0.1.0 commit (planned as 0.1.1).
 - `colorbars.tolnet_ozone` no longer uses the deprecated `set_under` / `set_over`.
 
 ### Known issues
-- GEOS-CF module (`atmoz.models.geos_cf`): the previous API is broken and the module is being redesigned.
+- GEOS-CF has been tested offline only; its first live download (OPeNDAP monthly requests, level ordering of `chm`) is not verified yet.
 - AirNow window logic assumes the API returns the `endDate` hour (inclusive); see `AirNowAPI.window_end_inclusive`. Not yet checked with a live key.
 - `EPA_PARAMETERS` (which parameter has which resolutions) has not been re-checked against EPA's current file list.
 - The UCN download path has been tested offline and on cached files, but its first-time download and conversion have not been run against the live server.
