@@ -22,9 +22,9 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 import pandas as pd
 import requests
 
+from atmoz.dataclasses import AtmozDataset, AtmozFrame
 from atmoz.exceptions import APIError
 from atmoz.resources import credentials
-from atmoz.resources.atmoz_dataclasses import atmoz_dataset
 from atmoz.resources.cache import cache_dir as _cache_root
 from atmoz.resources.sessionHandler import SessionHandler
 from atmoz.resources.urls import build_url, redact
@@ -34,6 +34,12 @@ _BASE_URL = "https://www.airnowapi.org/aq/data"
 
 _DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _HOUR_FMT = "%Y-%m-%dT%H"
+
+_UNITS = {"PPB": "ppb", "PPM": "ppm", "UG/M3": "µg/m3", "C": "°C", "M/S": "m/s", "PERCENT": "%", "MILLIBAR": "mbar",
+          "DEGREES": "deg"}
+_FRAME_COLUMNS = {"Latitude": "lat", "Longitude": "lon", "Value": "value", "RawConcentration": "raw_concentration",
+                  "AQI": "aqi", "Category": "category", "SiteName": "site_name", "AgencyName": "agency",
+                  "FullAQSCode": "aqs_code"}
 
 
 @dataclass
@@ -108,7 +114,8 @@ class AirNowAPI:
 
     Public entry points:
 
-    * :meth:`download` -> :class:`~atmoz.atmoz_dataset` (``.data`` is ``{name: DataFrame}`` (one frame), ``.metadata["sites"]`` a per-site table)
+    * :meth:`download` -> :class:`~atmoz.dataclasses.AtmozDataset`: one frame per site and parameter, keyed
+      ``"{AQSID}/{PARAMETER}"`` (``.metadata["sites"]`` is a per-site table)
     * :meth:`fetch`    -> ``{filename: path}`` (the whole query saved as one Parquet file)
 
     Notes:
@@ -258,12 +265,42 @@ class AirNowAPI:
         return metadata
 
     # ---- 5. assemble -----------------------------------------------------------------------
-    def _assemble(self, df: pd.DataFrame, query: dict) -> atmoz_dataset:
+    @staticmethod
+    def _site_id(row: pd.Series) -> str:
+        for col in ("IntlAQSCode", "FullAQSCode"):
+            if row.get(col):
+                return str(row[col])
+        return f"{row['Latitude']:.4f},{row['Longitude']:.4f}"
+
+    def _frames(self, df: pd.DataFrame) -> Dict[str, AtmozFrame]:
+        """One :class:`AtmozFrame` per site and parameter, indexed by UTC time."""
+        if df.empty:
+            return {}
+        df = df.assign(_site=df.apply(self._site_id, axis=1))
+        df["UTC"] = pd.to_datetime(df["UTC"], utc=True)
+        frames: Dict[str, AtmozFrame] = {}
+        for (site, parameter), part in df.groupby(["_site", "Parameter"], sort=True):
+            part = part.sort_values("UTC", kind="stable")
+            first = part.iloc[0]
+            out = part[[c for c in _FRAME_COLUMNS if c in part.columns]].rename(columns=_FRAME_COLUMNS)
+            out["lat"], out["lon"] = first["Latitude"], first["Longitude"]
+            out.index = pd.DatetimeIndex(part["UTC"], name="time")
+            unit = str(first.get("Unit", "")).strip()
+            meta = {"site": site, "parameter": parameter, "site_name": first.get("SiteName"),
+                    "agency": first.get("AgencyName"), "aqs_code": first.get("FullAQSCode"),
+                    "intl_aqs_code": first.get("IntlAQSCode")}
+            frames[f"{site}/{parameter}"] = AtmozFrame(
+                out, units={"value": _UNITS.get(unit.upper(), unit)} if unit else {}, lat="lat", lon="lon", alt=None,
+                metadata=meta)
+        return frames
+
+    def _assemble(self, df: pd.DataFrame, query: dict) -> AtmozDataset:
         stamp = lambda s: s.replace(":", "")
         name = f"airnow_{stamp(query['startDate'])}_{stamp(query['endDate'])}"
         meta = {"endpoint": "airnow", "files": [name], "rows": {name: len(df)},
-                "start": query["startDate"], "end": query["endDate"], "sites": self._metadata(df)}
-        return atmoz_dataset(data={name: df}, metadata=meta, datatype="surface")
+                "start": query["startDate"], "end": query["endDate"], "query": dict(query),
+                "sites": self._metadata(df) if not df.empty else pd.DataFrame()}
+        return AtmozDataset(name=name, source="AirNow API", frames=self._frames(df), metadata=meta)
 
     def _collect(self, start_date, end_date, params, *, chunk, max_workers, use_cache, refresh, silent, show_traceback):
         """validate -> load every window on threads -> one DataFrame (+ the query that produced it)."""
@@ -277,8 +314,6 @@ class AirNowAPI:
         )
         df = pd.concat(list(frames.values()), ignore_index=True) if frames else pd.DataFrame()
         df = df.drop_duplicates(ignore_index=True)  # safety net if AirNow's endDate semantics differ
-        if df.empty:
-            raise ValueError("AirNow returned no observations for this request.")
         return df, {**query, "startDate": jobs[0]["startDate"], "endDate": jobs[-1]["endDate"]}
 
     # ---- public --------------------------------------------------------------------------------
@@ -295,9 +330,9 @@ class AirNowAPI:
                  silent: bool = False,
                  show_traceback: bool = False,
                  session_handler: Optional[SessionHandler] = None,
-                 **params) -> atmoz_dataset:
+                 **params) -> AtmozDataset:
         """
-        Fetch observations for a date range and return them as an ``atmoz_dataset``.
+        Fetch observations for a date range and return them as an :class:`~atmoz.dataclasses.AtmozDataset`.
 
         Parameters:
             start_date, end_date: Inclusive range. A bare date (``"2025-08-07"``) as *end_date*
@@ -311,6 +346,11 @@ class AirNowAPI:
             use_cache, refresh: Cache controls (see class docs).
             silent: No progress bar.
             **params: :class:`AirNowParams` fields: ``parameters``, ``BBOX``, ``dataType``, ...
+
+        Returns:
+            One frame per site and parameter, keyed ``"{AQSID}/{PARAMETER}"``: UTC ``time`` index, columns ``value``,
+            ``lat``, ``lon`` and the extras AirNow reports; ``units["value"]`` is the normalised API unit. An empty
+            result gives an empty dataset.
 
         Raises:
             DownloadError: if any window fails (no partial result).
@@ -345,6 +385,8 @@ class AirNowAPI:
         api = cls(api_key, session_handler=session_handler)
         df, query = api._collect(start_date, end_date, params, chunk=chunk, max_workers=max_workers,
                                  use_cache=use_cache, refresh=refresh, silent=silent, show_traceback=show_traceback)
+        if df.empty:
+            raise ValueError("AirNow returned no observations for this request.")
         df.attrs = {"query_params": query}
         stamp = lambda s: s.replace(":", "")
         filename = f"airnow_api_query_{stamp(query['startDate'])}_{stamp(query['endDate'])}.parquet"

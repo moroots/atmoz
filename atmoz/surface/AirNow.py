@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Literal, Optional
 
-from atmoz.resources.atmoz_dataclasses import atmoz_dataset
+from atmoz.dataclasses import AtmozDataset
 from atmoz.surface.AirNow_API import AirNowAPI
 from atmoz.surface.AQS import EPA_PreGen
 
@@ -39,12 +39,13 @@ class AirNow:
             raise ValueError(f"Unsupported endpoint: {endpoint}. Valid options are 'airnow' and 'aqs'.") from None
 
     @classmethod
-    def download(cls, endpoint: str = "airnow", **kwargs) -> atmoz_dataset:
+    def download(cls, endpoint: str = "airnow", **kwargs) -> AtmozDataset:
         """
-        The single entry point. Always returns an :class:`~atmoz.atmoz_dataset` (``datatype="surface"``), the same shape
-        for both backends: ``ds.data == {name: DataFrame}`` and ``ds.metadata`` is a dict
-        (``endpoint``, ``files``, ``rows``; the AirNow API also adds ``start``, ``end`` and a per-site table ``sites``).
-        ``ds.frame`` returns the DataFrame when there is only one.
+        The single entry point. Always returns an :class:`~atmoz.dataclasses.AtmozDataset`: one
+        :class:`~atmoz.dataclasses.AtmozFrame` per site and parameter, keyed ``"{site}/{parameter}"``
+        (e.g. ``"840240053001/OZONE"``), with ``ds.metadata`` a dict (``endpoint``, ``files``, ``rows``; the AirNow API
+        also adds ``start``, ``end``, ``query`` and a per-site table ``sites``). ``ds.frame`` returns the frame when
+        there is only one.
 
         * ``endpoint="airnow"``: arguments: see :meth:`AirNowAPI.download`.
         * ``endpoint="aqs"``: arguments: see :meth:`EPA_PreGen.download`.
