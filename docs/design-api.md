@@ -11,7 +11,7 @@ Status: agreed, not yet implemented. This is the brief for the migration; implem
   * `units`: `{column: unit}`, the only source of truth for units (no per-row `unit` column),
   * `metadata`: a dict that is stored on the frame (today the argument is silently dropped: fix).
 * `AtmozDataset` (replaces `AtmoDataset`): a named collection of `AtmozFrame`s.
-  * all frames share one schema (axes and units); time range inferred from the `t` index;
+  * all frames share one axis schema (lat/lon/alt column names); units are per frame (one dataset can hold ppb ozone and ug/m3 PM2.5); time range inferred from the `t` index;
   * has `name`, `source`, `metadata` (provenance: endpoint, files, rows, query).
 * `atmoz_dataset` is deleted from the public API (no users yet, so no compatibility shim). Every `download()` returns an `AtmozDataset`.
 * Fixes while migrating: units accept `ppbv` as an alias of `ppb` (normalised to `ppb`); the `frames={AtmoFrame}` default becomes `None`.

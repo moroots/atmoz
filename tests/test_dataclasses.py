@@ -102,7 +102,7 @@ def test_dataset_single_frame_shortcut_and_empty():
 
 
 def test_dataset_schema_must_match():
-    other = AtmozFrame(make_df(), units={"value": "ppm"}, lat="lat", lon="lon")
+    other = AtmozFrame(make_df(), units={"value": "ppb"}, lat="lat")   # no lon axis
     with pytest.raises(ValueError, match="schema"):
         AtmozDataset(frames={"a": make_frame(), "b": other})
     ds = AtmozDataset(frames={"a": make_frame()})
@@ -134,3 +134,9 @@ def test_dataset_pickle_and_delete():
     assert list(back) == ["a", "b"]
     del ds["a"]
     assert list(ds) == ["b"]
+
+
+def test_units_may_differ_between_frames():
+    pm = AtmozFrame(make_df(), units={"value": "µg/m3"}, lat="lat", lon="lon")
+    ds = AtmozDataset(frames={"a/OZONE": make_frame(), "a/PM2.5": pm})
+    assert ds["a/PM2.5"].units["value"] == "µg/m3" and ds["a/OZONE"].units["value"] == "ppb"

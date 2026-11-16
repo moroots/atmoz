@@ -1,8 +1,9 @@
-"""AtmozDataset: a named collection of AtmozFrames that share one schema.
+"""AtmozDataset: a named collection of AtmozFrames that share one axis schema.
 
 What every ``download()`` returns. Keys are site/parameter (surface) or file/chunk names (profiles).
 
-* every frame has the same axes (``lat``, ``lon``, ``alt`` column names) and the same ``units`` mapping;
+* every frame has the same axes (``lat``, ``lon``, ``alt`` column names). Units are per frame (``frame.units``), because one
+  dataset can hold several pollutants (ppb for ozone, ug/m3 for PM2.5);
 * ``time_start`` / ``time_end`` come from the frames' ``t`` index;
 * ``metadata`` holds provenance (endpoint, files, rows, query);
 * pandas methods broadcast to every frame: ``ds.resample("1h").mean()`` returns a new AtmozDataset.
@@ -24,12 +25,12 @@ from .AtmozFrame import AtmozFrame
 
 
 def _schema(af: AtmozFrame) -> dict:
-    return {"lat": af._lat, "lon": af._lon, "alt": af._alt, "units": dict(af.units)}
+    return {"lat": af._lat, "lon": af._lon, "alt": af._alt}
 
 
 def _check_schema(reference: dict, key: str, candidate: dict) -> None:
     problems = [f"  {k}: reference={reference[k]!r}, {key!r}={candidate[k]!r}"
-                for k in ("lat", "lon", "alt", "units") if reference[k] != candidate[k]]
+                for k in ("lat", "lon", "alt") if reference[k] != candidate[k]]
     if problems:
         raise ValueError(f"AtmozDataset: frame {key!r} does not share the dataset schema:\n" + "\n".join(problems))
 
@@ -78,8 +79,8 @@ class AtmozDataset:
 
     @property
     def schema(self) -> Optional[dict]:
-        """The shared schema: ``{"lat", "lon", "alt", "units"}`` (None while empty)."""
-        return None if self._schema is None else {**self._schema, "units": dict(self._schema["units"])}
+        """The shared schema: ``{"lat", "lon", "alt"}`` (None while empty)."""
+        return None if self._schema is None else dict(self._schema)
 
     @property
     def frame(self) -> AtmozFrame:
