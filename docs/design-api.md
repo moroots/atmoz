@@ -38,3 +38,19 @@ Cache the raw file as parquet. Filters apply to the cached parquet before the pe
 ## Out of scope for now
 
 Publishing to PyPI and release housekeeping. Version stays 0.1.0 until then (nothing has been published to PyPI, so 0.1.0 is free). The marama_2026 analysis lives in its own repo.
+
+## Altitude references
+
+`alt` is in km. `metadata["alt_reference"]` is `"asl"` or `"agl"`, and `metadata["site_elevation_km"]` converts between them
+(`AtmozFrame.with_alt_reference`). TOLNet is asl (instrument elevation from the file), GEOS-CF is agl. `collocate` converts to agl when
+they differ and raises when a reference or elevation is missing.
+
+## Next scope (agreed 2026-11-16)
+
+* `atmoz.collocate`: a list of frames or datasets; the first is the anchor; datasets pair by nearest site within `max_distance_km`;
+  vertical `method="auto"` (interpolate when the other profile is coarser, bin-mean when it is finer); time window as well as point match.
+* `Sonde.read(path)`: NASA LaRC STAQS `.ict` files to an AtmozDataset (one frame per flight, per-row lat/lon, asl).
+* `atmoz.stats`: `compare`, `exceedances`, `diurnal`, `trend`. `atmoz.vertical`: `layer_mean`, `mean_profile`.
+* `atmoz.met` (extra `atmoz[met]`): theta, dewpoint, PBL height, wind components, Skew-T plot.
+* New plots follow the existing styled pattern. All of it is part of the stable 0.1.0 surface, so only what is solid ships.
+* Bar: offline tests plus one real-data check per source.
