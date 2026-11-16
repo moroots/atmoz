@@ -11,16 +11,16 @@ pytest.importorskip("netCDF4")
 
 import atmoz
 from conftest import FakeResponse
+from atmoz.dataclasses import AtmozDataset, AtmozFrame
 from atmoz.exceptions import DownloadError, NoDataError, RequestTooLargeError
 from atmoz.lidar import UCN
 from atmoz.lidar import ucn as ucn_mod
-from atmoz.resources.atmoz_dataclasses import atmoz_dataset
 
 ALT = np.array([10.0, 20.0, 30.0, 40.0])
 
 
-def l2_nc(tmp_path):
-    t = pd.date_range("2026-11-01", periods=6, freq="10min")
+def l2_nc(tmp_path, day="2026-11-01"):
+    t = pd.date_range(day, periods=6, freq="10min")
     ds = xr.Dataset(
         {
             "attenuated_backscatter": (("altitude", "time"), np.arange(24, dtype="float64").reshape(4, 6), {"units": "km^-1.sr^-1"}),
@@ -32,7 +32,7 @@ def l2_nc(tmp_path):
         coords={"time": t, "altitude": ALT, "retrieval_layer": ["NSL", "RL"]},
         attrs={"algorithm_version": "V1", "history": "made in a test"},
     )
-    path = tmp_path / "l2.nc"
+    path = tmp_path / f"l2_{day}.nc"
     ds.to_netcdf(path)
     return path.read_bytes()
 
@@ -56,7 +56,14 @@ def l3_nc(tmp_path):
 
 def server(tmp_path, *, missing=(), listed=None):
     """Fake UCN. *missing* are 'YYYY-MM-DD' days with no file; *listed* is the viewer's availability list."""
-    files = {"2": l2_nc(tmp_path), "3": l3_nc(tmp_path)}
+    files = {"3": l3_nc(tmp_path)}
+    l2 = {}
+
+    def l2_for(day):
+        with ucn_mod._netcdf_lock:      # the HDF5 library is not thread-safe: build files and read them one at a time
+            if day not in l2:
+                l2[day] = l2_nc(tmp_path, day)
+            return l2[day]
 
     def handler(url, **kwargs):
         if "action=netcdf_download" in url:
@@ -64,7 +71,7 @@ def server(tmp_path, *, missing=(), listed=None):
             level = url.split("level=")[1].split("&")[0]
             if day in missing:
                 return FakeResponse(404, b"")
-            return FakeResponse(200, files[level])
+            return FakeResponse(200, l2_for(day) if level == "2" else files[level])
         if "/viewer/?ceilometer=" in url:
             days = listed if listed is not None else ["2026-11-01", "2026-11-02", "2026-11-03"]
             return FakeResponse(200, text=f"<script>window.availableDatesJson = {json.dumps(days)};</script>")
@@ -110,23 +117,29 @@ def test_url():
 
 # ---- download ----------------------------------------------------------------
 
-def test_download_l2_returns_dataframes_with_list_columns(tmp_path, fake_http):
+def test_download_l2_returns_long_frames(tmp_path, fake_http):
     h = fake_http(server(tmp_path))
     ds = dl(h, 9, "2026-11-01")
-    assert isinstance(ds, atmoz_dataset) and ds.datatype == "lidar"
+    assert isinstance(ds, AtmozDataset) and ds.name == "UCN" and ds.source == "UCN"
     assert ds.metadata == {"endpoint": "ucn", "files": ["CEILO-9_20261101_L2"], "missing": []}
-    df = ds.data["CEILO-9_20261101_L2"]
-    assert isinstance(df, pd.DataFrame) and df.index.name == "time" and len(df) == 6
-    assert isinstance(df.index, pd.DatetimeIndex) and df.index[1] - df.index[0] == pd.Timedelta("10min")
-    cell = df["attenuated_backscatter"].iloc[0]
-    assert cell.dtype == np.float32 and cell.shape == (4,)
-    assert df["attenuated_backscatter"].iloc[1].tolist() == [1.0, 7.0, 13.0, 19.0]   # column 1 of the (altitude, time) array
-    assert df["cloud_layers"].iloc[0].shape == (3,) and df["jump_primary"].iloc[0].shape == (2,)
-    assert df["nsl_ml_height"].dtype == np.float64 and np.isnan(df["nsl_ml_height"].iloc[2])
-    assert df.attrs["altitude_m"] == ALT.tolist() and df.attrs["list_labels"]["jump_primary"] == ["NSL", "RL"]
-    assert "attenuated_backscatter" not in df.attrs["list_labels"]          # heights are stored once, as altitude_m
-    assert df.attrs["units"]["nsl_ml_height"] == "m" and df.attrs["ceilometer"] == 9
-    assert df.attrs["latitude"] == pytest.approx(38.92) and df.attrs["attrs"]["algorithm_version"] == "V1"
+    f = ds["CEILO-9_20261101_L2"]
+    assert isinstance(f, AtmozFrame) and len(f) == 6 * 4                      # 6 times x 4 altitudes
+    df = f.df
+    assert df.index.name == "time" and str(df.index.tz) == "UTC"
+    assert f.t[0] == pd.Timestamp("2026-11-01", tz="UTC") and f.t[4] - f.t[0] == pd.Timedelta("10min")
+    assert f.axes == {"t": "index", "lat": "lat", "lon": "lon", "alt": "alt"}
+    assert df["alt"].iloc[:4].tolist() == [0.01, 0.02, 0.03, 0.04]            # km
+    assert df["value"].iloc[4:8].tolist() == [1.0, 7.0, 13.0, 19.0]           # time step 1 of the (altitude, time) array
+    assert df["value"].dtype == np.float32
+    assert df["nsl_ml_height"].dtype == np.float64 and df["nsl_ml_height"].iloc[8:12].isna().all()
+    assert df["nsl_ml_height"].iloc[4:8].tolist() == [120.0] * 4
+    assert "cloud_layers" not in df and "jump_primary" not in df
+    assert (df["lat"] == 38.92).all() and (df["lon"] == -77.01).all()
+    assert f.units["value"] == "km^-1.sr^-1" and f.units["alt"] == "km" and f.units["nsl_ml_height"] == "m"
+    m = f.metadata
+    assert m["ceilometer"] == 9 and m["level"] == "L2" and m["date"] == "2026-11-01" and m["file"] == "CEILO-9_20261101_L2"
+    assert m["altitude_m"] == ALT.tolist() and m["list_labels"]["jump_primary"] == ["NSL", "RL"]
+    assert sorted(m["not_in_frame"]) == ["cloud_layers", "jump_primary"] and m["attrs"]["algorithm_version"] == "V1"
 
 
 def test_the_cache_holds_only_parquet(tmp_path, fake_http):
@@ -148,9 +161,10 @@ def test_second_call_is_served_from_the_cache(tmp_path, fake_http):
 def test_l3_keeps_only_the_hourly_table(tmp_path, fake_http):
     h = fake_http(server(tmp_path))
     ds = dl(h, 9, "2026-11-01", level="L3")
-    df = ds.data["CEILO-9_20261101_L3"]
-    assert list(df.columns) == ["nsl_ml_hourly_mean", "nsl_ml_hourly_count"] and len(df) == 3
-    assert "attenuated_backscatter" not in df and "backscatter" in df.attrs["note"]
+    f = ds["CEILO-9_20261101_L3"]
+    assert list(f.df.columns) == ["alt", "nsl_ml_hourly_mean", "nsl_ml_hourly_count", "lat", "lon"] and len(f) == 3
+    assert f.df["alt"].isna().all() and str(f.t.tz) == "UTC" and f.units["nsl_ml_hourly_mean"] == "m"
+    assert "value" not in f.df and "backscatter" in f.metadata["note"]
 
 
 def test_a_netcdf_left_by_an_earlier_version_is_converted_without_network(tmp_path, fake_http):
@@ -158,7 +172,7 @@ def test_a_netcdf_left_by_an_earlier_version_is_converted_without_network(tmp_pa
     legacy = atmoz.cache_dir("ucn") / "CEILO-9_20261101_L2.nc"
     legacy.write_bytes(l2_nc(tmp_path))
     ds = dl(h, 9, "2026-11-01")
-    assert len(ds.data["CEILO-9_20261101_L2"]) == 6 and h.calls == []
+    assert len(ds["CEILO-9_20261101_L2"]) == 24 and h.calls == []
     assert not legacy.exists()
 
 
@@ -181,7 +195,7 @@ def test_an_html_page_instead_of_a_file_counts_as_no_data(fake_http):
 def test_skip_missing_leaves_gaps_and_lists_them(tmp_path, fake_http):
     h = fake_http(server(tmp_path, missing={"2026-11-02"}))
     ds = dl(h, 9, "2026-11-01", "2026-11-03", skip_missing=True)
-    assert ds.metadata["missing"] == ["CEILO-9_20261102_L2"] and len(ds.data) == 2
+    assert ds.metadata["missing"] == ["CEILO-9_20261102_L2"] and len(ds) == 2
 
 
 def test_skip_missing_does_not_ask_for_days_the_viewer_does_not_list(tmp_path, fake_http):
@@ -197,7 +211,7 @@ def test_skip_missing_makes_no_request_when_everything_is_cached(tmp_path, fake_
     dl(h, 9, "2026-11-01", "2026-11-02")
     n = len(h.calls)
     ds = dl(h, 9, "2026-11-01", "2026-11-02", skip_missing=True)
-    assert len(ds.data) == 2 and len(h.calls) == n
+    assert len(ds) == 2 and len(h.calls) == n
 
 
 def test_everything_missing_is_an_error_not_an_empty_dataset(tmp_path, fake_http):
@@ -222,14 +236,14 @@ def test_big_requests_stop_before_any_network_and_allow_large_overrides(tmp_path
     monkeypatch.setattr(ucn_mod, "LARGE_DOWNLOAD_MB", 1.0)
     with pytest.raises(RequestTooLargeError):
         dl(h, 9, "2026-11-01", "2026-11-02")
-    assert len(dl(h, 9, "2026-11-01", "2026-11-02", allow_large=True).data) == 2
+    assert len(dl(h, 9, "2026-11-01", "2026-11-02", allow_large=True)) == 2
 
 
 def test_cached_files_do_not_count_toward_the_download_limit(tmp_path, fake_http, monkeypatch):
     h = fake_http(server(tmp_path))
     dl(h, 9, "2026-11-01", "2026-11-02")
     monkeypatch.setattr(ucn_mod, "LARGE_DOWNLOAD_MB", 1.0)
-    assert len(dl(h, 9, "2026-11-01", "2026-11-02").data) == 2
+    assert len(dl(h, 9, "2026-11-01", "2026-11-02")) == 2
 
 
 def test_available_previews_a_request_without_downloading_data(tmp_path, fake_http):
@@ -271,12 +285,16 @@ def test_stack_joins_days_and_backscatter_makes_an_array(tmp_path, fake_http):
     h = fake_http(server(tmp_path))
     ds = dl(h, 9, "2026-11-01", "2026-11-02")
     both = UCN.stack(ds, 9)
-    assert len(both) == 12 and both.index.is_monotonic_increasing and both.attrs["dates"] == ["2026-11-01", "2026-11-02"]
+    assert isinstance(both, AtmozFrame) and len(both) == 2 * 24 and both.t.is_monotonic_increasing
+    assert both.metadata["dates"] == ["2026-11-01", "2026-11-02"] and both.units == ds["CEILO-9_20261101_L2"].units
+    assert both.df["alt"].iloc[:4].tolist() == [0.01, 0.02, 0.03, 0.04]       # altitudes stay in order within a time
     arr = UCN.backscatter(both)
     assert arr.dims == ("time", "altitude") and arr.shape == (12, 4) and arr.altitude.values.tolist() == ALT.tolist()
-    assert arr.attrs["units"] == "km^-1.sr^-1"
+    assert arr.attrs["units"] == "km^-1.sr^-1" and arr.values[1].tolist() == [1.0, 7.0, 13.0, 19.0]
     with pytest.raises(KeyError):
         UCN.stack(ds, 5)
+    with pytest.raises(KeyError):
+        UCN.stack(ds, 9, "L3")
 
 
 def test_sites_parses_the_viewer_dropdown(fake_http):

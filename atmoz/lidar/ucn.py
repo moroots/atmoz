@@ -12,8 +12,9 @@ boundary-layer height). UCN publishes one NetCDF file per ceilometer per UTC day
 (L0b, the raw 16 s profiles at ~33 MB a day, is not supported yet.)
 
 * The cache holds **one compact parquet file per ceilometer-day** (about half the size of the NetCDF), not the NetCDF.
-* ``download()`` returns DataFrames: one row per time step, one column per variable; profile variables
-  (``attenuated_backscatter``, ``cloud_layers``, ...) hold one numpy array per row.
+* ``download()`` returns an ``AtmozDataset`` of long-format ``AtmozFrame``s: index ``time`` (UTC), ``alt`` (km),
+  ``value`` (L2: attenuated backscatter) and the per-time scalars repeated per altitude. L3 frames have one row per
+  hour, an all-NaN ``alt`` column (so L2 and L3 share one schema) and no ``value``.
 * Gentle on the server by design: 2 workers, a pause between requests, an ``atmoz/<version>`` User-Agent,
   retries with backoff, files fetched once and then served from the cache.
 * Follows the package-wide process (see ``docs/conventions.md``):
@@ -28,6 +29,7 @@ import shutil
 import tempfile
 import threading
 import time
+import warnings
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -39,8 +41,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
 
+from atmoz.dataclasses import AtmozDataset, AtmozFrame
 from atmoz.exceptions import NoDataError, RequestTooLargeError
-from atmoz.resources.atmoz_dataclasses import atmoz_dataset
 from atmoz.resources.cache import _meta_path, _read_meta, _write_meta
 from atmoz.resources.cache import cache_dir as _cache_root
 from atmoz.resources.cache import download_to_cache
@@ -91,6 +93,13 @@ def _jsonable(obj: Any) -> Any:
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     return str(obj)
+
+
+def _frame(df: pd.DataFrame, units: Dict[str, str], metadata: Dict[str, Any], **axes) -> AtmozFrame:
+    """An AtmozFrame with ``alt`` as its altitude column; source units such as ``km^-1.sr^-1`` are kept as given."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*not a recognised unit")
+        return AtmozFrame(df, units=units, alt="alt", metadata=metadata, **axes)
 
 
 class UCN:
@@ -292,13 +301,51 @@ class UCN:
 
     # ---- 5. assemble -------------------------------------------------------------
     @staticmethod
-    def _assemble(results: Dict[str, Optional[pd.DataFrame]], unlisted: Optional[List[str]] = None) -> atmoz_dataset:
+    def _to_frame(name: str, df: pd.DataFrame) -> AtmozFrame:
+        """One parsed (wide) file -> a long AtmozFrame. UCN times are naive UTC.
+
+        L2: one row per time and altitude; ``value`` is the attenuated backscatter and the per-time scalars repeat
+        along altitude. Variables with another second dimension (``cloud_layers`` ...) are not per-altitude and are
+        left out (listed in ``metadata["not_in_frame"]``; they stay in the cached parquet). L3: one row per hour.
+        """
+        meta = df.attrs
+        index = df.index.tz_localize("UTC") if df.index.tz is None else df.index
+        index = index.rename("time")
+        lists = [c for c in df.columns if df[c].dtype == object and len(df) and isinstance(df[c].iloc[0], np.ndarray)]
+        scalars = [c for c in df.columns if c not in lists]
+        alt_m = meta.get("altitude_m")
+        profile = "attenuated_backscatter" in lists and bool(alt_m) and len(df) > 0
+        units = {c: u for c, u in meta.get("units", {}).items() if c in scalars}
+        if profile:
+            n = len(alt_m)
+            wide = np.stack(df["attenuated_backscatter"].to_numpy())
+            long = pd.DataFrame({"alt": np.tile(np.asarray(alt_m, dtype=float) / 1000.0, len(df)), "value": wide.ravel(),
+                                 **{c: np.repeat(df[c].to_numpy(), n) for c in scalars}},
+                                index=index.repeat(n))
+            units["value"] = meta.get("units", {}).get("attenuated_backscatter", "")
+            lists.remove("attenuated_backscatter")
+        else:
+            long = pd.DataFrame({"alt": np.nan, **{c: df[c].to_numpy() for c in scalars}}, index=index)
+        units["alt"] = "km"
+        lat, lon = meta.get("latitude"), meta.get("longitude")
+        if lat is not None and lon is not None:
+            long = long.assign(lat=float(lat), lon=float(lon))
+            units.update(lat="deg", lon="deg")
+        frame_meta = {"instrument": "ceilometer", "ceilometer": meta.get("ceilometer"), "level": meta.get("level"),
+                      "date": meta.get("date"), "file": name, "latitude": lat, "longitude": lon,
+                      "altitude_m": alt_m, "list_labels": meta.get("list_labels", {}), "attrs": meta.get("attrs", {}),
+                      "note": meta.get("note"), "not_in_frame": lists}
+        return _frame(long, units, frame_meta, **({"lat": "lat", "lon": "lon"} if "lat" in long else {}))
+
+    @classmethod
+    def _assemble(cls, results: Dict[str, Optional[pd.DataFrame]], unlisted: Optional[List[str]] = None) -> AtmozDataset:
         found = {name: df for name, df in results.items() if df is not None}
         if not found:
             raise NoDataError(f"UCN has none of the {len(results) + len(unlisted or [])} requested file(s).")
         missing = [n for n, df in results.items() if df is None] + list(unlisted or [])
         meta = {"endpoint": "ucn", "files": list(found), "missing": missing}
-        return atmoz_dataset(data=found, metadata=meta, datatype="lidar")
+        frames = {name: cls._to_frame(name, df) for name, df in found.items()}
+        return AtmozDataset(name="UCN", source="UCN", frames=frames, metadata=meta)
 
     # ---- availability, size estimates ------------------------------------------------
     @classmethod
@@ -390,8 +437,8 @@ class UCN:
                  cache_dir: Optional[PathLike] = None,
                  silent: bool = False,
                  show_traceback: bool = False,
-                 session_handler: Optional[SessionHandler] = None) -> atmoz_dataset:
-        """Download (once, then cached) and read every (ceilometer, day, level) file as a DataFrame.
+                 session_handler: Optional[SessionHandler] = None) -> AtmozDataset:
+        """Download (once, then cached) and read every (ceilometer, day, level) file as an AtmozFrame.
 
         Parameters
         ----------
@@ -417,9 +464,10 @@ class UCN:
 
         Returns
         -------
-        atmoz_dataset
-            ``datatype="lidar"``; ``.data == {"CEILO-9_20261101_L2": DataFrame, ...}``. Each DataFrame is indexed by
-            UTC ``time``; its ``.attrs`` hold the altitudes, list labels, units and the file's attributes.
+        AtmozDataset
+            ``ds["CEILO-9_20261101_L2"]`` is a long-format :class:`~atmoz.AtmozFrame`: index ``time`` (UTC), ``alt``
+            (km), ``value`` (L2 attenuated backscatter, source units), per-time scalars, constant ``lat``/``lon``.
+            Its ``metadata`` hold the ceilometer, level, date, altitudes in m, list labels and the file's attributes.
 
         Raises
         ------
@@ -495,24 +543,28 @@ class UCN:
 
     # ---- helpers for the returned frames ---------------------------------------------
     @staticmethod
-    def stack(ds: atmoz_dataset, ceilometer: int, level: str = "L2") -> pd.DataFrame:
-        """All days of one ceilometer and level in *ds*, joined into one time-sorted DataFrame."""
+    def stack(ds: AtmozDataset, ceilometer: int, level: str = "L2") -> AtmozFrame:
+        """All days of one ceilometer and level in *ds*, joined into one time-sorted AtmozFrame."""
         level = _LEVELS[str(level).strip().lower()]
-        parts = [df for name, df in sorted(ds.data.items()) if df.attrs.get("ceilometer") == ceilometer
-                 and df.attrs.get("level") == level]
+        parts = [f for _, f in sorted(ds.items()) if f.metadata.get("ceilometer") == ceilometer
+                 and f.metadata.get("level") == level]
         if not parts:
             raise KeyError(f"No L{level[1:]} data for ceilometer {ceilometer} in this dataset.")
-        out = pd.concat(parts).sort_index()
-        out.attrs.update({k: v for k, v in parts[0].attrs.items() if k not in ("date", "attrs")})
-        out.attrs["dates"] = [p.attrs.get("date") for p in parts]
-        return out
+        first = parts[0]
+        meta = {k: v for k, v in first.metadata.items() if k not in ("date", "attrs", "file")}
+        meta["dates"] = [p.metadata.get("date") for p in parts]
+        return _frame(pd.concat([p.df for p in parts]).sort_index(kind="stable"), first.units, meta,
+                      lat=first._lat, lon=first._lon)
 
     @staticmethod
-    def backscatter(df: pd.DataFrame):
-        """The ``attenuated_backscatter`` list column as an ``xarray.DataArray`` with ``time`` and ``altitude`` (m)."""
+    def backscatter(frame: AtmozFrame):
+        """The attenuated backscatter of an L2 frame as an ``xarray.DataArray`` with ``time`` and ``altitude`` (m)."""
         import xarray as xr
 
-        arr = np.stack(df["attenuated_backscatter"].to_numpy())
-        return xr.DataArray(arr, dims=("time", "altitude"),
-                            coords={"time": df.index.values, "altitude": np.asarray(df.attrs["altitude_m"])},
-                            name="attenuated_backscatter", attrs={"units": df.attrs.get("units", {}).get("attenuated_backscatter", "")})
+        df = frame.df
+        wide = pd.DataFrame({"t": df.index, "alt": df["alt"].to_numpy(), "v": df["value"].to_numpy()}).pivot(
+            index="t", columns="alt", values="v")
+        return xr.DataArray(wide.to_numpy(), dims=("time", "altitude"),
+                            coords={"time": wide.index.tz_convert("UTC").tz_localize(None).values,
+                                    "altitude": np.sort(np.asarray(frame.metadata["altitude_m"], dtype=float))},
+                            name="attenuated_backscatter", attrs={"units": frame.units.get("value", "")})

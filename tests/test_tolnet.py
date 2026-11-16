@@ -11,9 +11,9 @@ import pandas as pd
 import pytest
 from conftest import FakeResponse
 
+from atmoz.dataclasses import AtmozDataset, AtmozFrame
 from atmoz.exceptions import DownloadError, NoDataError
 from atmoz.lidar import TOLNET
-from atmoz.resources.atmoz_dataclasses import atmoz_dataset
 
 ALT = [0.5, 1.0, 1.5]
 
@@ -34,7 +34,8 @@ def payload(day):
                          "processing_type_name": "Centrally Processed"},
             "altitude": {"data": ALT},
             "datetime": {"data": [f"{day}T00:00:00Z", f"{day}T01:00:00Z"]},
-            "value": {"data": [[10.0, 20.0, 30.0], [11.0, "bad", 31.0]]}}
+            "value": {"data": [[10.0, 20.0, 30.0], [11.0, "bad", 31.0]], "units": "ppbv"},
+            "uncertainty": {"data": [[1.0, 2.0, 3.0], [1.5, 2.5, 3.5]], "units": "ppbv"}}
 
 
 DAYS = {1: "2025-07-28", 2: "2025-07-29"}
@@ -56,22 +57,33 @@ def handler(fail_ids=()):
     return h
 
 
-def test_download_returns_dataset_with_frames_and_metadata(fake_http):
+def test_download_returns_dataset_with_long_frames_and_metadata(fake_http):
     h = fake_http(handler())
     ds = TOLNET.download("2025-07-28", "2025-07-29", session_handler=h, silent=True)
-    assert isinstance(ds, atmoz_dataset) and ds.datatype == "lidar"
-    assert set(ds.data) == {"tolnet_2025-07-28.json", "tolnet_2025-07-29.json"}
-    df = ds.data["tolnet_2025-07-28.json"]
-    assert list(df.columns) == ALT and str(df.index.tz) == "UTC"
-    assert pd.isna(df.iloc[1, 1]) and df.iloc[0, 0] == 10.0          # non-numeric -> NaN
+    assert isinstance(ds, AtmozDataset) and ds.name == "TOLNet" and ds.source == "TOLNet"
+    assert set(ds) == {"tolnet_2025-07-28.json", "tolnet_2025-07-29.json"}
+    f = ds["tolnet_2025-07-28.json"]
+    assert isinstance(f, AtmozFrame) and len(f) == 6                      # 2 times x 3 altitudes
+    assert f.df.index.name == "time" and str(f.df.index.tz) == "UTC"
+    assert f.t[0] == pd.Timestamp("2025-07-28T00:00:00Z") and f.t[3] == pd.Timestamp("2025-07-28T01:00:00Z")
+    assert f.df["alt"].tolist() == ALT * 2 and f.axes == {"t": "index", "lat": "lat", "lon": "lon", "alt": "alt"}
+    assert f.df["value"].iloc[0] == 10.0 and pd.isna(f.df["value"].iloc[4])       # non-numeric -> NaN
+    assert f.df["uncertainty"].tolist() == [1.0, 2.0, 3.0, 1.5, 2.5, 3.5]
+    assert set(f.df["lat"]) == {39.24} and set(f.df["lon"]) == {-76.363}
+    assert f.units["value"] == "ppb" and f.units["alt"] == "km" and f.units["uncertainty"] == "ppb"
+    assert f.metadata["instrument"] == "NASA JPL SMOL-2" and f.metadata["processing"] == "Centrally Processed"
+    assert f.metadata["product"] == "HIRES" and f.metadata["file_id"] == 1 and f.metadata["near_real_time"] is False
     assert ds.metadata["endpoint"] == "tolnet" and len(ds.metadata["file_list"]) == 2
+    assert ds.metadata["rows"] == {n: 6 for n in ds}
 
 
 def test_group_gives_instrument_site_then_day(fake_http):
     ds = TOLNET.download("2025-07-28", "2025-07-29", session_handler=fake_http(handler()), silent=True)
     groups = TOLNET.group(ds)
     assert list(groups) == [("NASA JPL SMOL-2", "Centrally Processed", "39.24x-76.363")]
-    assert list(next(iter(groups.values()))) == ["2025-07-28", "2025-07-29"]
+    days = next(iter(groups.values()))
+    assert list(days) == ["2025-07-28", "2025-07-29"] and all(isinstance(f, AtmozFrame) for f in days.values())
+    assert days["2025-07-29"] is ds["tolnet_2025-07-29.json"]
 
 
 def test_second_download_uses_the_cache(fake_http):
@@ -120,6 +132,9 @@ def test_plot_curtain_and_plot_curtains(fake_http):
     group = next(iter(TOLNET.group(ds).values()))
     fig, ax = TOLNET.plot_curtain(group)
     assert ax.get_title("left") and len(fig.axes) >= 2    # curtain + colorbar (+ watermark)
+    fig1, _ = TOLNET.plot_curtain(ds["tolnet_2025-07-28.json"])          # one long frame is pivoted to time x altitude
+    wide = TOLNET._curtain_input(ds["tolnet_2025-07-28.json"])
+    assert wide.shape == (2, 3) and wide.columns.tolist() == ALT and wide.iloc[0].tolist() == [10.0, 20.0, 30.0]
     figs = TOLNET.plot_curtains(ds)
     assert len(figs) == 1
     plt.close("all")
