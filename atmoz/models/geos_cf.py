@@ -1,14 +1,14 @@
 """NASA GEOS-CF model output at a point, via OPeNDAP.
 
-Follows the package conventions (``docs/conventions.md``): ``download()`` returns an ``atmoz_dataset`` of DataFrames,
+Follows the package conventions (``docs/conventions.md``): ``download()`` returns an ``AtmozDataset``,
 ``fetch()`` returns ``{name: Path}`` (cached parquet files), results are cached and downloads are all-or-nothing.
 
 Data access: https://opendap.nccs.nasa.gov/dods/gmao/geos-cf/
 
 >>> ds = GEOS_CF.download(39.05, -76.87, "2025-07-28", "2025-08-01", variables=["o3"])
->>> ds.data["aqc_assim"]                      # index: UTC time, column: o3 (ppbv)
+>>> ds["o3"]                                  # AtmozFrame: index t (UTC), columns value (ppb), lat, lon
 >>> prof = GEOS_CF.download(39.05, -76.87, "2025-07-28", "2025-08-01", collection="chm", variables=["o3"])
->>> prof.data["chm_assim_o3"]                 # index: UTC time, columns: model level (the server's `lev` values)
+>>> prof["o3"]                                # long: index t, columns value (ppb), lat, lon, alt (km), lev
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import pandas as pd
 import xarray as xr
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from atmoz.resources.atmoz_dataclasses import atmoz_dataset
+from atmoz.dataclasses import AtmozDataset, AtmozFrame
 from atmoz.resources.cache import cache_dir as _cache_root
 from atmoz.resources.utilities import PathLike, run_jobs
 
@@ -69,8 +69,12 @@ _COLLECTION_CATALOG: Dict[str, dict] = {
 
 # Gas mixing ratios are served as mol/mol; ``units="ppbv"`` (the default) multiplies these by 1e9. Anything else is returned as served.
 _GASES = {"o3", "no2", "no", "co", "so2", "hno3", "nh3", "hcho", "ch4", "isop", "pan", "h2o2"}
-_NATIVE_UNITS = {"pm25_rh35_gcc": "ug/m3", "t2m": "K", "u10m": "m/s", "v10m": "m/s", "q2m": "kg/kg", "zpbl": "m", "ps": "Pa",
+_NATIVE_UNITS = {"pm25_rh35_gcc": "µg/m3", "t2m": "K", "u10m": "m/s", "v10m": "m/s", "q2m": "kg/kg", "zpbl": "m", "ps": "Pa",
                  "zl": "m", "t": "K", "u": "m/s", "v": "m/s", "q": "kg/kg", "rh": "1", **{g: "mol/mol" for g in _GASES}}
+
+# Collections on model levels: long profiles whose altitude comes from the layer height ``zl`` of ``met3d`` (same 36 levels)
+_LEVEL_COLLECTIONS = ("chm", "met3d")
+_HEIGHT_JOB = {"collection": "met3d", "mode": "assim", "variables": ["zl"]}
 
 # the HDF5 / netCDF-C libraries underneath xarray are not thread-safe: talk to the server one request at a time
 _netcdf_lock = threading.Lock()
@@ -176,15 +180,15 @@ def _snap(value: float) -> float:
 class GEOS_CF:
     """Single-site GEOS-CF client.
 
-    * :meth:`download` -> :class:`~atmoz.atmoz_dataset` (``datatype="model"``)
+    * :meth:`download` -> :class:`~atmoz.dataclasses.AtmozDataset`
     * :meth:`fetch`    -> ``{name: parquet path}`` (cached tidy tables, one per month of data)
 
-    ``ds.data`` holds, per collection and mode:
+    ``ds`` holds one :class:`~atmoz.dataclasses.AtmozFrame` per variable, keyed by the variable name (``"o3"``). Each has
+    time (UTC) as its index and the columns ``value``, ``lat`` and ``lon`` (the grid cell). Collections on model levels
+    (``chm``, ``met3d``) are long profiles with an extra ``alt`` column (layer height above the surface, km, from the
+    ``zl`` field of ``met3d``) and ``lev`` (the model level). ``chm`` therefore also reads ``met3d`` for the heights.
 
-    * surface collections (``aqc``, ``met``): ``"{collection}_{mode}"``, a DataFrame indexed by UTC time with one column per variable;
-    * profile collection (``chm``): ``"{collection}_{mode}_{variable}"``, indexed by UTC time with one column per model level.
-
-    Gas species are returned in **ppbv** by default (``units="mol/mol"`` keeps the server's raw units). The point is the
+    Gas species are in **ppb** by default (``units="mol/mol"`` keeps the server's raw units). The point is the
     nearest 0.25-degree grid cell; the cell's coordinates are in ``ds.metadata["lat"]`` / ``["lon"]``.
     """
 
@@ -269,32 +273,34 @@ class GEOS_CF:
         return cls._parse_one(cls._fetch_one(job, **kw))
 
     @staticmethod
-    def _assemble(tidy: pd.DataFrame, q: GEOS_CF_QUERY, units: str) -> atmoz_dataset:
-        """All months -> the dataset (surface: one wide frame; profiles: one time x level frame per variable)."""
-        tidy = tidy.drop_duplicates().sort_values(["time", "lev"] if "lev" in tidy else ["time"])
+    def _assemble(tidy: pd.DataFrame, heights: Optional[pd.DataFrame], q: GEOS_CF_QUERY, units: str,
+                  files: List[str]) -> AtmozDataset:
+        """All months -> the dataset: one frame per variable (long with ``alt`` and ``lev`` on model levels)."""
+        leveled = q.collection in _LEVEL_COLLECTIONS
+        tidy = tidy.drop_duplicates().sort_values(["time", "lev"] if leveled else ["time"])
+        if leveled:
+            zl = heights.drop_duplicates(["time", "lev"]).set_index(["time", "lev"])["zl"]
+            tidy["alt"] = zl.reindex(pd.MultiIndex.from_frame(tidy[["time", "lev"]])).to_numpy() / 1000.0
         scale = {v: (1e9 if units == "ppbv" and v in _GASES else 1.0) for v in q.variables}
-        unit_of = {v: ("ppbv" if scale[v] != 1.0 else _NATIVE_UNITS.get(v, "unknown")) for v in q.variables}
-        for v, f in scale.items():
-            if f != 1.0:
-                tidy[v] = tidy[v] * f
-        base = f"{q.collection}_{q.mode}"
-        attrs = {"lat_requested": q.lat, "lon_requested": q.lon, "lat": float(tidy["lat"].iloc[0]),
-                 "lon": float(tidy["lon"].iloc[0]), "collection": q.collection, "mode": q.mode}
+        unit_of = {v: ("ppbv" if scale[v] != 1.0 else _NATIVE_UNITS.get(v)) for v in q.variables}
+        cell = {"lat": float(tidy["lat"].iloc[0]), "lon": float(tidy["lon"].iloc[0])}
+        axes = ["lat", "lon"] + (["alt", "lev"] if leveled else [])
+        indexed = tidy.set_index("time")
 
-        data: Dict[str, pd.DataFrame] = {}
-        if "lev" in tidy and tidy["lev"].nunique() > 1:                   # profiles
-            for v in q.variables:
-                frame = tidy.pivot(index="time", columns="lev", values=v)
-                frame.columns.name = "lev"
-                frame.attrs = {**attrs, "units": unit_of[v], "variable": v}
-                data[f"{base}_{v}"] = frame
-        else:                                                             # surface
-            frame = tidy.drop(columns=[c for c in ("lev", "lat", "lon") if c in tidy]).set_index("time")[q.variables]
-            frame.attrs = {**attrs, "units": unit_of}
-            data[base] = frame
-        meta = {"endpoint": "geos_cf", "files": list(data), "rows": {k: len(f) for k, f in data.items()},
-                "start": q.start_date, "end": q.end_date, "units": unit_of, **attrs}
-        return atmoz_dataset(data=data, metadata=meta, datatype="model")
+        frames: Dict[str, AtmozFrame] = {}
+        for v in q.variables:
+            df = indexed[axes].copy()
+            df.insert(0, "value", indexed[v] * scale[v])
+            frame_units = {"value": unit_of[v], **({"alt": "km"} if leveled else {})}
+            frames[v] = AtmozFrame(df, units={c: u for c, u in frame_units.items() if u}, lat="lat", lon="lon",
+                                   alt="alt" if leveled else None,
+                                   metadata={"variable": v, "collection": q.collection, "mode": q.mode, **cell})
+        meta = {"endpoint": "geos_cf", "collection": q.collection, "mode": q.mode, "variables": list(q.variables),
+                "lat_requested": q.lat, "lon_requested": q.lon, **cell, "start": q.start_date, "end": q.end_date,
+                "units": {v: u for v, u in unit_of.items() if u}, "files": files,
+                "rows": {k: len(f) for k, f in frames.items()},
+                "altitude": "met3d zl (layer height above the surface, km)" if leveled else None}
+        return AtmozDataset(name=f"GEOS-CF {q.collection} {q.mode}", source="GEOS-CF", frames=frames, metadata=meta)
 
     # ---- public ------------------------------------------------------------------------------------------------
     @classmethod
@@ -313,8 +319,8 @@ class GEOS_CF:
                  refresh: bool = False,
                  cache_dir: Optional[PathLike] = None,
                  silent: bool = False,
-                 show_traceback: bool = False) -> atmoz_dataset:
-        """Download (once, then cached) a GEOS-CF point time series and return it as an ``atmoz_dataset``.
+                 show_traceback: bool = False) -> AtmozDataset:
+        """Download (once, then cached) a GEOS-CF point time series and return it as an ``AtmozDataset``.
 
         Parameters
         ----------
@@ -323,14 +329,14 @@ class GEOS_CF:
         start_date, end_date:
             Inclusive UTC days: ``YYYY-MM-DD``, ``YYYYMMDD``, ``date`` or ``datetime``.
         collection:
-            ``"aqc"`` (surface air quality, default), ``"chm"`` (chemistry profiles, 72 levels) or ``"met"`` (surface meteorology).
+            ``"aqc"`` (surface air quality, default), ``"chm"`` (chemistry profiles, 36 levels), ``"chm_sfc"``, ``"met"`` (surface meteorology) or ``"met3d"``.
             See ``GEOS_CF.catalog``.
         mode:
             ``"assim"`` (replay/historical, default) or ``"fcast"`` (forecast; ``aqc`` only).
         variables:
             Lower-case names (default: all of the collection's, see ``GEOS_CF.catalog``).
         units:
-            ``"ppbv"`` (default) converts gas mixing ratios from the server's mol/mol; ``"mol/mol"`` keeps them raw.
+            ``"ppbv"`` (default; stored as ``ppb``) converts gas mixing ratios from the server's mol/mol; ``"mol/mol"`` keeps them raw.
         max_workers:
             Months fetched at once. Server access is serialized anyway (the netCDF libraries are not thread-safe).
         use_cache, refresh, cache_dir:
@@ -339,9 +345,9 @@ class GEOS_CF:
 
         Returns
         -------
-        atmoz_dataset
-            ``datatype="model"``; see the class docs for ``.data``. ``.metadata`` has ``lat``, ``lon`` (the grid cell),
-            ``units`` and the request.
+        AtmozDataset
+            One frame per variable (see the class docs). ``.metadata`` has ``collection``, ``mode``, ``variables``,
+            ``lat_requested`` / ``lon_requested``, ``lat`` / ``lon`` (the grid cell), ``units``, ``files`` and the request.
 
         Raises
         ------
@@ -351,13 +357,17 @@ class GEOS_CF:
         if units not in ("ppbv", "mol/mol"):
             raise ValueError("units must be 'ppbv' or 'mol/mol'")
         dest_dir = Path(cache_dir) if cache_dir else _cache_root("geos_cf")
-        frames = run_jobs(
+        height_jobs = [{**j, **_HEIGHT_JOB} for j in jobs] if q.collection in _LEVEL_COLLECTIONS else []
+        all_jobs = list({cls._name(j): j for j in jobs + height_jobs}.values())
+        loaded = run_jobs(
             lambda job: cls._load_one(job, dest_dir=dest_dir, refresh=refresh, use_cache=use_cache),
-            jobs, key=lambda j: j["start"], describe=lambda j: f"{j['collection']}/{j['mode']} {j['start']}..{j['end']}",
+            all_jobs, key=cls._name, describe=lambda j: f"{j['collection']}/{j['mode']} {j['start']}..{j['end']}",
             noun="GEOS-CF request", desc=f"Downloading GEOS-CF {q.collection}/{q.mode}",
             max_workers=max_workers, silent=silent, show_traceback=show_traceback,
         )
-        return cls._assemble(pd.concat(list(frames.values()), ignore_index=True), q, units)
+        tidy = pd.concat([loaded[cls._name(j)] for j in jobs], ignore_index=True)
+        heights = pd.concat([loaded[cls._name(j)] for j in height_jobs], ignore_index=True) if height_jobs else None
+        return cls._assemble(tidy, heights, q, units, [cls._name(j) for j in jobs])
 
     @classmethod
     def fetch(cls,
@@ -390,5 +400,5 @@ class GEOS_CF:
 
 if __name__ == "__main__":
     ds = GEOS_CF.download(39.05, -76.87, "2025-07-28", "2025-08-01", variables=["o3"])
-    o3 = ds.data["aqc_assim"]["o3"]
-    print(f"O3 range: {o3.min():.1f} - {o3.max():.1f} ppbv")
+    o3 = ds["o3"]["value"]
+    print(f"O3 range: {o3.min():.1f} - {o3.max():.1f} ppb")
