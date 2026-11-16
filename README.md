@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="atmoz" width="180">
+</p>
+
 # Atmoz
 
 **Atmoz** is a Python toolkit for handling, analysing and visualising ground-based atmospheric datasets.

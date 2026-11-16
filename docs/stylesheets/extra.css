@@ -1,0 +1,25 @@
+/* atmoz brand palette. Base colours and alpha from the logo sheet; "on white" is the flattened result for UI use.
+     green   #114d0e  100%               -> primary
+     umber   #4d2e0e   50%  on white ≈ #a69787   (rules, subtle fills)
+     teal    #0e3c4d   80%  on white ≈ #3e6371   -> accent
+     ink     #000000   60%  on white = #666666   (secondary text)
+*/
+:root {
+  --atmoz-green: #114d0e;
+  --atmoz-umber: #4d2e0e;
+  --atmoz-teal: #0e3c4d;
+
+  --md-primary-fg-color: #114d0e;
+  --md-primary-fg-color--light: #3f7a3b;
+  --md-primary-fg-color--dark: #0a3008;
+  --md-primary-bg-color: #ffffff;
+  --md-primary-bg-color--light: rgba(255, 255, 255, 0.7);
+  --md-accent-fg-color: #0e3c4d;
+  --md-accent-fg-color--transparent: rgba(14, 60, 77, 0.1);
+  --md-typeset-a-color: #114d0e;
+}
+
+.md-typeset hr,
+.md-typeset table:not([class]) th { border-color: #a69787; }
+.md-typeset .md-typeset__table th { color: #0e3c4d; }
+.md-header__button.md-logo img { height: 1.5rem; width: auto; }

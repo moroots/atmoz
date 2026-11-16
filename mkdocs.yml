@@ -5,6 +5,14 @@ docs_dir: docs
 
 theme:
   name: material
+  logo: assets/logo-light.svg
+  favicon: assets/favicon.svg
+  palette:
+    primary: custom
+    accent: custom
+
+extra_css:
+  - stylesheets/extra.css
 
 nav:
   - Home: index.md
