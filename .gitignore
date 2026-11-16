@@ -206,3 +206,4 @@ atmoz.env
 .atmoz/
 uv.lock
 site/
+.claude/

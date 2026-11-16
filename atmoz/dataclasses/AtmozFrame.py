@@ -165,6 +165,8 @@ class AtmozFrame:
         if name.startswith("__") or name in AtmozFrame.__slots__:
             raise AttributeError(name)
         attr = getattr(self.df, name)
+        if name in ("loc", "iloc", "at", "iat"):
+            return _Indexer(self, attr)
         if callable(attr):
             def wrapper(*args, **kwargs):
                 return self._rewrap(attr(*args, **kwargs))
@@ -269,6 +271,20 @@ class AtmozFrame:
             "units": dict(self.units),
             "nulls": int(self.df.isnull().sum().sum()),
         }
+
+
+class _Indexer:
+    """``frame.loc[...]`` / ``frame.iloc[...]``: selects like pandas and keeps the axes, units and metadata of a DataFrame result."""
+
+    def __init__(self, frame: AtmozFrame, indexer):
+        self._frame = frame
+        self._indexer = indexer
+
+    def __getitem__(self, key):
+        return self._frame._rewrap(self._indexer[key])
+
+    def __setitem__(self, key, value):
+        self._indexer[key] = value
 
 
 class _Chain:

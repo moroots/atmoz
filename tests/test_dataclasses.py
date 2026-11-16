@@ -154,3 +154,14 @@ def test_location_and_inventory():
     assert list(inv["key"]) == ["a/OZONE", "b/OZONE"] and list(inv["value_unit"]) == ["ppb", "ppb"]
     assert inv.loc[0, "lat"] == 39.0 and inv.loc[0, "rows"] == 6
     assert len(AtmozDataset().inventory()) == 0
+
+
+def test_loc_and_iloc_keep_the_frame():
+    af = make_frame()
+    part = af.iloc[1:4]
+    assert isinstance(part, AtmozFrame) and len(part) == 3 and part.units == {"value": "ppb"} and part.metadata == {"site": "A"}
+    assert isinstance(af.loc["2024-07-01 00:30":"2024-07-01 01:30"], AtmozFrame)
+    assert af.iloc[0]["value"] == 0.0                          # a row is a plain Series
+    assert af.iloc[2, 0] == 2.0                                # a scalar
+    af.iloc[0, 0] = 99.0
+    assert af.df["value"].iloc[0] == 99.0
