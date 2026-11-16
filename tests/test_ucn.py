@@ -98,8 +98,9 @@ def test_validate_rejects_bad_input_and_l0b():
         UCN._validate(9, "2026-11-14", "2026-11-13")
     with pytest.raises(ValueError, match="Unknown level"):
         UCN._validate(9, "2026-11-14", level="L1")
-    with pytest.raises(ValueError, match="L0b"):
+    with pytest.raises(ValueError, match="L0b.*planned"):
         UCN._validate(9, "2026-11-14", level="L0b")
+    assert "L0b" in UCN.planned_levels and "L0b" not in UCN.levels
 
 
 def test_url():

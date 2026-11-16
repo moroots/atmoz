@@ -16,7 +16,7 @@ Work after the 0.1.0 commit (planned as 0.1.1).
   as list columns), `UCN.fetch()` the cached parquet paths, `UCN.available()` a size preview, `UCN.sites()` the ceilometer list,
   `UCN.stack()` / `UCN.backscatter()` helpers. The cache keeps one compact parquet file per day (about half the NetCDF size).
   Gentle on the server (2 workers, request pacing, `atmoz/<version>` User-Agent, never re-downloads final days) and bounded:
-  requests over ~1 GB raise `RequestTooLargeError` unless `allow_large=True`. L0b is not supported yet.
+  requests over ~1 GB raise `RequestTooLargeError` unless `allow_large=True`. L0b (raw 16 s profiles) is planned: `level="L0b"` raises a clear error and `UCN.planned_levels` lists it.
 - `atmoz.plot` / `atmoz.plotting`: opinionated plots with one entry point. `az.plot("curtain", df)` and
   `az.plot.curtain(df)` are the same call; `curtain`, `profile`, `windrose` (windrose) and `site_map` (plotly) so far.
   Matplotlib plots return `(fig, ax)`; plotly plots return the `Figure`. Unknown names suggest the closest match.

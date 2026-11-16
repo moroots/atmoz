@@ -97,6 +97,7 @@ class UCN:
     """Unified Ceilometer Network: ``UCN.download(9, "2026-11-01")`` returns L2 as DataFrames."""
 
     levels = tuple(_LEVELS.values())
+    planned_levels = {"L0b": "raw 16 s profiles, about 33 MB per ceilometer-day (planned, not supported yet)"}
 
     # ---- 1. validate (request -> jobs) -------------------------------------------
     @classmethod
@@ -114,7 +115,8 @@ class UCN:
         for lv in as_list(level):
             key = str(lv).strip().lower()
             if key == "l0b":
-                raise ValueError("L0b (raw 16 s profiles, ~33 MB a day) is not supported yet; use L2 or L3.")
+                raise ValueError("L0b (raw 16 s profiles, ~33 MB a day) is planned but not supported yet; "
+                                 f"use {' or '.join(cls.levels)} for now (see UCN.planned_levels).")
             try:
                 levels.append(_LEVELS[key])
             except KeyError:

@@ -153,7 +153,7 @@ t.calendar(instrument_group=7, file_type=1)
 ## UCN: Unified Ceilometer Network
 
 The [Unified Ceilometer Network](https://ucn.cas.hamptonu.edu/viewer/) (Hampton University) publishes one NetCDF file per
-ceilometer per UTC day. atmoz reads two levels (the raw 16 s `L0b` profiles are ~33 MB a day and are not supported yet):
+ceilometer per UTC day. atmoz reads two levels (**`L0b`**, the raw 16 s profiles at ~33 MB a day, is **planned but not supported yet**; asking for it raises a clear error, and `UCN.planned_levels` lists it):
 
 | Level | Contents | Size per day |
 |-------|----------|--------------|
