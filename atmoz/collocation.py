@@ -310,7 +310,7 @@ def collocate(
     names: Optional[Sequence[str]] = None,
     cols: Union[str, Sequence[str], Dict[str, str]] = "value",
     max_gap: Union[str, pd.Timedelta] = "1h",
-    window: Union[str, pd.Timedelta] = "10min",
+    window: Union[str, pd.Timedelta] = "1h",
     method: str = "auto",
     alt: Optional[float] = None,
     max_distance_km: float = 25.0,

@@ -17,7 +17,7 @@ its rows, its `alt` / `lat` / `lon` axes and its unit; every other source is bro
 | `names` | Output column names, one per source, distinct. Default: `obs`, `model`, `src3`, `src4`, ... |
 | `cols` | The column compared in each source (default `"value"`): one name for all, a list, or `{name: column}`. |
 | `max_gap` | Time tolerance for sources made of profiles at discrete times (a model, a lidar): NaN when the anchor time is farther than this from either neighbouring time. Default `"1h"`. |
-| `window` | Half-width of the time window averaged for a trajectory source (a sonde). Default `"10min"`. |
+| `window` | Half-width of the time window averaged for a trajectory source (a sonde). Default `"1h"`. |
 | `method` | Vertical method: `"auto"` (default), `"interp"` or `"mean"`. |
 | `alt` | With surface and profile sources mixed: the altitude (km) at which profiles are read. Default: the lowest valid level. |
 | `max_distance_km` | Datasets only: the farthest a frame may be from the anchor frame to be paired with it. Default 25. |
@@ -28,8 +28,8 @@ its rows, its `alt` / `lat` / `lon` axes and its unit; every other source is bro
 * **Time.** A source of profiles at discrete times is interpolated linearly between its two nearest times. If either neighbour is
   farther than `max_gap` away the result is NaN (use `"2h"` to bridge a missing hour). A source that is one continuous trajectory,
   where every row has its own time (a [sonde](sonde.md)), is averaged over its rows within `window` of the anchor time. A balloon takes
-  about an hour or more to ascend, so with the default 10 minutes it contributes only the altitudes it reached around each anchor time; use a
-  larger `window` to cover the whole ascent.
+  an hour or more to ascend, so the default window of one hour covers the troposphere around the anchor time; widen it to cover the
+  whole ascent, or narrow it to compare only the altitudes the balloon reached near that time.
 * **Altitude.** Each profile is brought onto the anchor's levels using its own `alt` column, which may differ per time (GEOS-CF layer
   heights do). `method="interp"` interpolates linearly in altitude, `"mean"` averages the points that fall into each anchor level's bin, and `"auto"`
   uses `"mean"` when the other profile is finer than the anchor and `"interp"` when it is coarser. Outside the other profile's altitude range
