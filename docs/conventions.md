@@ -1,6 +1,6 @@
 # Conventions
 
-Every data source in atmoz (AirNow API, EPA AQS files, TOLNet, UCN and GEOS-CF) follows the same
+Every data source in atmoz (AirNow API, EPA AQS files, TOLNet, UCN and GEOS-CF; `atmoz.Sonde.read` reads local sonde files into the same containers) follows the same
 process with the same names and returns the same containers, so you only learn it once.
 
 ## Public entry points
@@ -52,7 +52,13 @@ An **`AtmozFrame`** is one table: a pandas DataFrame plus its axes, units and me
 * `frame.units` is `{column: unit}` and the only place units are recorded (there is no per-row unit column).
 * `frame.metadata` is a dict (site, instrument, provenance) that travels with the frame.
 * Pandas methods work on the frame and keep what still applies: `frame.resample("1h").mean()` returns an `AtmozFrame`
-  (`frame["value"]` returns the plain Series).
+  (`frame["value"]` returns the plain Series). `frame.loc[...]` and `frame.iloc[...]` keep the frame too when they select rows or
+  columns (a scalar or a Series comes back as pandas gives it).
+* `frame.location` is `(lat, lon)` (the median of the position columns) or `None`.
+* `frame.alt_reference` says what `alt` is measured from, `"asl"` (above sea level) or `"agl"` (above ground), or `None` when not stated. It lives in
+  `metadata["alt_reference"]`; `metadata["site_elevation_km"]` is the ground elevation. `frame.with_alt_reference("agl")` (or `"asl"`) re-expresses `alt`
+  and needs the elevation. Sources set both when they know them: TOLNet files report altitude above sea level and carry the instrument elevation,
+  sondes are above sea level, GEOS-CF layer heights are above ground.
 
 An **`AtmozDataset`** is a named collection of frames.
 
@@ -83,9 +89,10 @@ Frame keys follow one scheme per source:
 |--------|-----|--------------|--------------|
 | AirNow API | `"{IntlAQSCode}/{PARAMETER}"`, e.g. `"840240053001/OZONE"` | one site and parameter; columns `value`, `lat`, `lon` and the extras the API reports (`raw_concentration`, `aqi`, ...) | `value` |
 | EPA AQS | `"{state}{county}{site}/{parameter code}"`, e.g. `"240230002/44201"` | one site and parameter (hourly files only); `value`, `lat`, `lon`, `poc`, `local_time`, ... | `value` |
-| TOLNet | the file name | one file, long format: `alt` (km), `value`, `lat`, `lon` | `value` |
+| TOLNet | the file name | one file, long format: `alt` (km above sea level), `value`, `lat`, `lon` | `value` |
 | UCN | `"CEILO-{n}_{YYYYMMDD}_{level}"`, e.g. `"CEILO-9_20261101_L2"` | one ceilometer, day and level, long format: `alt` (km), `value` (L2: attenuated backscatter), `lat`, `lon` | `value` |
-| GEOS-CF | the variable name, e.g. `"o3"` | one variable at the requested point: `value`, `lat`, `lon`; `alt` (km) and `lev` on model-level collections (`chm`, `met3d`) | `value` |
+| GEOS-CF | the variable name, e.g. `"o3"` | one variable at the requested point: `value`, `lat`, `lon`; `alt` (km above ground) and `lev` on model-level collections (`chm`, `met3d`) | `value` |
+| Sonde | the file name, e.g. `"staqs-..._ozonesonde.ict"` | one flight (a trajectory: every row has its own time): `alt` (km above sea level), `value` (ozone, ppb), `lat`, `lon` per row, plus the file's other variables; see [Sondes](sonde.md) | `value` |
 
 ## Units
 
@@ -130,15 +137,15 @@ lat, lon = ds.frame.location                      # e.g. a GEOS_CF.download(lat,
 
 ## Collocation
 
-`atmoz.collocate(obs, model, obs_col="value", model_col="value", max_gap="1h")` puts model output on the times and altitudes of an
-observation and returns an `AtmozFrame` with `obs` and `model` columns (plus `alt`, `lat`, `lon` from the observation).
+`atmoz.collocate([anchor, other, ...], names=[...])` brings several sources onto the first one (the anchor): its times, its altitudes and its
+unit. It takes frames or datasets and returns an `AtmozFrame` (an `AtmozDataset` when the anchor is a dataset) with one column per source,
+named `obs`, `model`, `src3`, ... unless `names=` says otherwise.
 
-* **Time**: for every observation time the model is interpolated linearly between its two nearest times; if either neighbour is more than
-  `max_gap` away the result is NaN.
-* **Altitude** (profiles): each model profile is interpolated onto the observation altitudes with the model's own `alt` column, which may differ
-  per time (GEOS-CF layer heights do). Outside the model's altitude range the result is NaN.
-* **Units**: the model column is converted to the observation unit when both are declared and differ.
-* Profile against profile is level by level; surface against surface in time only. A surface series against a profile is allowed: the profile side is first reduced to its lowest valid level at each time (or to the altitude given as `alt=` in km).
-* `result.metadata` keeps both inputs' metadata, `max_gap` and the columns used.
+* **Time**: profiles at discrete times (a model, a lidar) are interpolated linearly in time, NaN when a neighbour is more than `max_gap` away;
+  a trajectory (a sonde) is averaged over `window` around each anchor time.
+* **Altitude**: profiles are brought onto the anchor's levels by interpolation or bin means (`method=`). Altitude references (`asl` / `agl`)
+  are reconciled with the site elevation, or an error is raised.
+* **Units**: converted to the anchor's unit when both are declared and differ.
+* Surface and profile sources together are compared at the surface. Datasets pair frame by frame by nearest site (`max_distance_km`).
 
-See [Collocation](collocation.md) for a TOLNet versus GEOS-CF example.
+See [Collocation](collocation.md) for the options and examples (lidar, model and sonde; AQS and GEOS-CF datasets).

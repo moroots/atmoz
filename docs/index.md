@@ -1,7 +1,8 @@
 # atmoz
 
 **atmoz** is a Python toolkit for working with ground-based atmospheric datasets: EPA surface air quality
-(AirNow, AQS), NASA TOLNet ozone lidar, and GEOS-CF model output, with common data classes and plotting helpers.
+(AirNow, AQS), NASA TOLNet ozone lidar, ceilometers, balloon sondes and GEOS-CF model output, with common data classes,
+collocation, statistics and plotting helpers.
 It is a dev / science tool: it makes the common things fast, and gets out of your way for everything else
 (every download can be fetched as plain files or used as plain pandas DataFrames through `frame.df`, every default can be overridden).
 
@@ -12,6 +13,7 @@ It builds on the earlier [DATAS](https://github.com/moroots/DATAS) package.
 ```bash
 pip install git+https://github.com/moroots/atmoz                       # core: data classes + AirNow / EPA AQS
 pip install "atmoz[lidar] @ git+https://github.com/moroots/atmoz"     # + TOLNet
+pip install "atmoz[met] @ git+https://github.com/moroots/atmoz"       # + meteorology (MetPy)
 ```
 
 See [Installation](installation.md) for every extra.
@@ -24,7 +26,12 @@ See [Installation](installation.md) for every extra.
 | [`atmoz.lidar`](lidar.md) | NASA TOLNet ozone-lidar queries, downloads and curtain plots | `lidar` |
 | [`atmoz.models`](models.md) | NASA GEOS-CF point extractions via OPeNDAP | `models` |
 | `atmoz.data_access` | NASA EarthData login helper | `nasa` |
-| `atmoz.dataclasses` | `AtmozFrame` / `AtmozDataset` containers, returned by every `download()`; `atmoz.collocate` ([Collocation](collocation.md)) | core |
+| [`atmoz.Sonde`](sonde.md) | Balloon sondes (NASA LaRC STAQS ICARTT files) read into an `AtmozDataset` | core |
+| `atmoz.dataclasses` | `AtmozFrame` / `AtmozDataset` containers, returned by every `download()` and by `Sonde.read` | core |
+| [`atmoz.collocate`](collocation.md) | Put several sources (lidar, model, sonde, surface) on the first one's times, altitudes and unit | core |
+| [`atmoz.stats`, `atmoz.vertical`](analysis.md) | `compare`, `exceedances`, `diurnal`, `trend`; `layer_mean`, `mean_profile` | core |
+| [`atmoz.met`](met.md) | Potential temperature, dewpoint, wind components, PBL height, Skew-T | `met` |
+| [`atmoz.plot`](plotting.md) | Opinionated plots: curtain, profile, comparison profile, exceedances, wind rose, site map, Skew-T | core (`plots`, `met` for some) |
 
 ## Good to know
 

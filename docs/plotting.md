@@ -22,17 +22,45 @@ interactive ones) return the plotly `Figure`.
 |---|---|---|
 | `curtain` | matplotlib | Time-altitude curtain from a DataFrame (time index, altitude columns) or a dict of them |
 | `profile` | matplotlib | Vertical profiles with optional uncertainty bands |
+| `comparison_profile` | matplotlib | Mean profiles of every source of a collocated frame, with the spread (1 standard deviation) shaded |
+| `exceedances` | matplotlib | Days above the ozone standard per site, as bars, from the table of `atmoz.stats.exceedances` |
+| `skewt` | matplotlib | Skew-T log-p diagram of a sonde or model profile (also `atmoz.met.skewt`; needs `atmoz[met]`) |
 | `windrose` | matplotlib (windrose) | Wind rose from direction and speed |
 | `site_map` | plotly | Interactive map of site locations |
 
-`curtain` takes the wide form, a DataFrame with time as the index and altitude as the columns. A long `AtmozFrame` (what TOLNet and
-GEOS-CF return) is pivoted first:
+`curtain` takes the wide form, a DataFrame with time as the index and altitude as the columns, or a long profile `AtmozFrame` (what
+TOLNet returns: `alt` and `value` columns), which it pivots for you:
 
 ```python
 frame = ds[next(iter(ds))]                                  # TOLNet frame: UTC time index; alt, value
+fig, ax = az.plot.curtain(frame)                            # same as pivoting yourself:
 wide = frame.df.pivot(columns="alt", values="value")
 fig, ax = az.plot.curtain(wide)
 ```
+
+## Comparing sources
+
+```python
+out = az.collocate(lidar, model, sonde, names=["lidar", "geos_cf", "sonde"])
+fig, ax = az.plot.comparison_profile(out)                   # mean profile per source, shaded standard deviation
+fig, ax = az.plot.comparison_profile(out, columns=["lidar", "geos_cf"], bins=0.5, ylim=(0, 6))
+
+table = az.stats.exceedances(aqs_ds)                        # per-site days above 70 ppb MDA8
+fig, ax = az.plot.exceedances(table, top=15)                # bars, most exceedance days first
+```
+
+`comparison_profile` takes the result of [`atmoz.collocate`](collocation.md) for profiles (a frame, or a dataset of them, pooled); `columns=` picks
+the sources (default: all recorded in `metadata["columns"]`), `bins=` is the altitude bin width in km (default 1) or the edges, and the axis is
+labelled with the altitude reference. `exceedances` takes the table from [`atmoz.stats.exceedances`](analysis.md); `top=` limits the bars
+(default 25, `None` for all) and `level_ppb=` only sets the default title.
+
+## Skew-T
+
+```python
+fig, ax = az.plot.skewt(sonde, dewpoint="dewpoint", wind=("u", "v"))      # same as az.met.skewt
+```
+
+Needs `pip install "atmoz[met]"`; the columns and units it expects are described in [Meteorology](met.md).
 
 `TOLNET.plot_curtain(frame)` and `TOLNET.plot_curtains(ds)` do the pivot for you (and add the TOLNet watermark). GEOS-CF layer heights differ
 per time, so pivot its profiles on `lev` or collocate them onto a lidar's altitudes with [`atmoz.collocate`](collocation.md) first.

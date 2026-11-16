@@ -7,7 +7,7 @@ pip install git+https://github.com/moroots/atmoz
 ```
 
 The core install is deliberately light (pandas, numpy, pyarrow, requests, matplotlib, pint, tqdm). It already
-contains the AirNow / EPA AQS downloaders and the data classes. Add extras for the rest:
+contains the AirNow / EPA AQS downloaders, the data classes, `atmoz.collocate`, `atmoz.Sonde`, `atmoz.stats` and `atmoz.vertical`. Add extras for the rest:
 
 | Extra | Adds | Needed for |
 |-------|------|-----------|
@@ -15,12 +15,14 @@ contains the AirNow / EPA AQS downloaders and the data classes. Add extras for t
 | `lidar` | pydantic, pyyaml, python-dateutil, earthaccess | `atmoz.lidar.TOLNET` |
 | `models` | pydantic, xarray, netcdf4 | `atmoz.models.GEOS_CF` |
 | `nasa` | pydantic, earthaccess | `atmoz.data_access.NASA` |
+| `plots` | plotly, windrose, geopandas, shapely | `plot.windrose`, `plot.site_map` |
+| `met` | metpy | `atmoz.met` (theta, dewpoint, wind components, PBL height) and `plot.skewt`; see [Meteorology](met.md) |
 | `legacy` | geopandas, h5py, windrose, beautifulsoup4, ... | DATAS-era helpers in `atmoz.resources` |
 | `all` | everything above | |
 | `dev` | pytest, ruff, build, mkdocs | working on atmoz |
 
 ```bash
-pip install "atmoz[surface,lidar] @ git+https://github.com/moroots/atmoz"
+pip install "atmoz[surface,lidar,met] @ git+https://github.com/moroots/atmoz"
 ```
 
 If you import a module whose extra is missing, the error tells you which one to install.

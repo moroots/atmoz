@@ -11,15 +11,25 @@ Everything below ships in 0.1.0, which has not been published yet.
 ### Added
 - **One data shape for every source.** `atmoz.AtmozFrame` (a pandas DataFrame with a UTC `DatetimeIndex` as time axis `t`, `lat` / `lon` / `alt` (km)
   axis columns, `units` per column and a `metadata` dict) and `atmoz.AtmozDataset` (a named collection of frames sharing one axis schema, units per frame).
-  `ds[key]`, `ds.select("*/OZONE")`, `ds.frame` (the only frame), `ds.inventory()` (one row per frame: lat, lon, altitude range, units, time span),
+  `ds[key]`, `ds.select("*/OZONE")`, `ds.frame` (the only frame), `frame.loc` / `frame.iloc` (keep the frame), `ds.inventory()` (one row per frame: lat, lon, altitude range, units, time span),
   `frame.location`, `frame.convert_units(column, unit)`; pandas methods work on a frame and broadcast over a dataset (`ds.resample("1h").mean()`).
   `ppbv` is normalised to `ppb`. Every `download()` returns an `AtmozDataset`; see `docs/conventions.md` (Containers, Units, Site metadata).
 - **Frame keys per source**: AirNow `"{IntlAQSCode}/{PARAMETER}"`; AQS `"{state}{county}{site}/{parameter code}"`; TOLNet one frame per file (long: `alt`, `value`, `lat`, `lon`,
   units read from the file); UCN one frame per ceilometer, day and level (`"CEILO-9_20261101_L2"`, `value` is the attenuated backscatter);
   GEOS-CF one frame per variable (`alt` in km and `lev` on `chm` / `met3d`; `chm` also reads `met3d` for the layer heights).
-- `atmoz.collocate(obs, model, obs_col=, model_col=, max_gap=)`: interpolates a model frame onto an observation's times (linear in time, NaN beyond `max_gap`) and altitudes
-  (per-time profile interpolation, so GEOS-CF layer heights may differ per time), converting the model to the observation unit. Returns an `AtmozFrame` with `obs` and `model`
-  columns. New guide `docs/collocation.md` (TOLNet versus GEOS-CF).
+- `atmoz.collocate(sources, ..., names=, cols=, max_gap=, window=, method=, alt=, max_distance_km=, assume_same_reference=)`: puts several sources (a list or varargs of
+  `AtmozFrame` / `AtmozDataset`) on the first one, the anchor: its times, altitudes and unit. Output columns are named per source (`obs`, `model`, `src3`, ... or `names=`).
+  Profiles at discrete times are interpolated in time (NaN beyond `max_gap`), a trajectory such as a sonde is averaged over `window`; profiles are brought onto the anchor's
+  levels by interpolation or bin means (`method="auto"|"interp"|"mean"`); asl / agl altitude references are reconciled with the site elevation or an error is raised;
+  units are converted to the anchor's; surface and profile sources together are compared at the surface (`alt=`). Datasets pair frame by frame by nearest site
+  (`max_distance_km`, `metadata["pairs"]` / `["unpaired"]`). New guide `docs/collocation.md` (lidar + model + sonde; AQS + GEOS-CF datasets, including the half-hour timestamp offset).
+- `atmoz.Sonde.read(path | directory | list)`: NASA LaRC STAQS ICARTT balloon sondes (ozonesonde and windsonde, `.ict`, downloaded by hand) as an `AtmozDataset`, one frame per
+  flight (`alt` km above sea level, `value` ozone in ppb, per-row `lat` / `lon`, `location`, `site_elevation_km`). The declared ozone unit is checked against the file's own ozone
+  partial pressure and pressure, with a warning when a column is mislabelled. Built on `atmoz.resources.icartt.read_icartt`. New guide `docs/sonde.md`.
+- `atmoz.stats` (`compare`, `exceedances`, `diurnal`, `trend`) and `atmoz.vertical` (`layer_mean`, `mean_profile`): statistics on frames and datasets that return pandas objects. New guide `docs/analysis.md`.
+- `atmoz.met` (extra `met`, MetPy): `theta`, `dewpoint`, `wind_components`, `wind_speed_direction`, `pbl_height` (parcel method) and the `skewt` plot; guide `docs/met.md`.
+- Altitude references: `AtmozFrame.alt_reference` (`"asl"` / `"agl"`) and `with_alt_reference(...)`, using `metadata["site_elevation_km"]`. TOLNet files report altitude above sea level and carry the
+  instrument elevation; GEOS-CF layer heights are above ground.
 - **EPA AQS** `download()` filters and caching: the parsed file is cached as parquet next to the zip; filters `bbox`, `start_date` / `end_date`, `site`, `state`, `county`
   (codes or names), `parameter`, `poc` and `where={column: value}` are applied before the per-site split. Hourly files only (UTC time from `Date GMT` + `Time GMT`,
   the local standard time stays in a `local_time` column); units are declared as the file gives them (ozone stays ppm).
@@ -39,7 +49,8 @@ Everything below ships in 0.1.0, which has not been published yet.
   matches). `fetch()` takes `min_date` / `max_date` / `**query` and `dest_dir=` (default: the cache). `TOLNET.group(ds)`, `TOLNET.open_hdf()` and `TOLNET.plot_curtains(ds)`;
   `TOLNET.plot_curtain` delegates to `atmoz.plotting.curtain`. Value and altitude units are read from the file (m is converted to km).
 - `atmoz.plot` / `atmoz.plotting`: opinionated plots with one entry point. `az.plot("curtain", df)` and
-  `az.plot.curtain(df)` are the same call; `curtain`, `profile`, `windrose` (windrose) and `site_map` (plotly) so far.
+  `az.plot.curtain(df)` are the same call; `curtain` (also takes a long `AtmozFrame`), `profile`, `comparison_profile` (mean profiles of collocated sources with their spread),
+  `exceedances` (days above the ozone standard per site), `skewt` (extra `met`), `windrose` (windrose) and `site_map` (plotly).
   Matplotlib plots return `(fig, ax)`; plotly plots return the `Figure`. Unknown names suggest the closest match.
 - `atmoz.plotting.styles`: immutable `Style` objects (rcParams, colour-blind-safe colour cycle, figure size, artist
   params, plotly layout). Pass `style=` (object, name, dict, or `None`) and `figsize=` to any plot. Style is applied per
@@ -48,11 +59,11 @@ Everything below ships in 0.1.0, which has not been published yet.
 - `atmoz.resources.utilities`: the plumbing every data source shares (thread pool with all-or-nothing failure, shared HTTP sessions).
 - Typed exceptions `NoDataError` and `RequestTooLargeError`; `SessionHandler(user_agent=...)`, and the shared session now
   identifies itself as `atmoz/<version>`.
-- Extras: `plots` (plotly, windrose, geopandas, shapely); `lidar` includes `xarray`, `netcdf4` and `h5py`.
-- `docs/conventions.md` (the package-wide process, naming, containers, units, site metadata and collocation), `docs/collocation.md`, `docs/plotting.md`, and
+- Extras: `plots` (plotly, windrose, geopandas, shapely); `met` (MetPy); `lidar` includes `xarray`, `netcdf4` and `h5py`.
+- `docs/conventions.md` (the package-wide process, naming, containers, units, site metadata and collocation), `docs/collocation.md`, `docs/sonde.md`, `docs/analysis.md`, `docs/met.md`, `docs/plotting.md`, and
   `docs/references/epa-40cfr50-appendix-u/`: the EPA rules for 8-hour ozone averages and the daily maximum (the spec for `atmoz.surface.mda8`), as text and JSON.
 - GitHub Actions CI (`.github/workflows/ci.yml`) next to the GitLab CI; test notebooks in `dev/notebooks/`.
-- Tests for the containers, collocation, AirNow, AQS, TOLNet, UCN, plotting, unit conversion and the GEOS-CF cache.
+- Tests for the containers, collocation, sondes, stats, met, AirNow, AQS, TOLNet, UCN, plotting, unit conversion and the GEOS-CF cache.
 
 ### Changed
 - **`AirNow.download(endpoint=...)` is the single entry point** and returns an `AtmozDataset` for both endpoints (one frame per site and parameter); `ds.metadata` is a dict
