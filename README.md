@@ -55,7 +55,7 @@ ds_roi = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly
 # Live AirNow API (free key from https://docs.airnowapi.org/): save it once, use it forever
 AirNow.set_api_key()
 dataset = AirNow.download(endpoint="airnow", start_date="2025-08-01", end_date="2025-08-07", parameters=["OZONE", "PM25"])
-dataset.data, dataset.metadata
+dataset.frame, dataset.metadata["sites"]
 ```
 
 ```python

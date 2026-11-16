@@ -22,7 +22,7 @@ df = data["hourly_44201_2025.csv"]
 # Live AirNow API (needs a free key, saved once, see "API key" below)
 AirNow.set_api_key()                      # prompts, then stores it for every future session
 ds = AirNow.download(endpoint="airnow", start_date="2025-08-01", end_date="2025-08-07", parameters=["OZONE", "PM25"])
-ds.data, ds.metadata
+ds.frame, ds.metadata["sites"]
 ```
 
 Everything is cached on disk (see [Caching](caching.md)), so re-running a script is instant, and every
@@ -40,9 +40,10 @@ AirNow.download(endpoint="aqs" | "airnow", **kwargs)
 | `endpoint` | Backend | Returns | Use when |
 |------------|---------|---------|----------|
 | `"aqs"` | `EPA_PreGen.download()` | `atmoz_dataset`; `.data` is `{filename: DataFrame}` | Historical bulk files for whole years |
-| `"airnow"` (default) | `AirNowAPI.download()` | `atmoz_dataset`; `.data` is one DataFrame | Recent / near-real-time observations from the live API |
+| `"airnow"` (default) | `AirNowAPI.download()` | `atmoz_dataset`; `.data` is `{name: DataFrame}` (one frame, also `ds.frame`) | Recent / near-real-time observations from the live API |
 
-Both endpoints return an `atmoz_dataset` (`datatype="surface"`). `.metadata` records which backend produced it.
+Both endpoints return an `atmoz_dataset` (`datatype="surface"`) with the same shape: `.data` is `{name: DataFrame}` and `.metadata` is a dict
+(`endpoint`, `files`, `rows`; the AirNow API adds `start`, `end` and `sites`). `ds.frame` gives the DataFrame when there is only one.
 
 ### `endpoint="aqs"` kwargs
 
@@ -183,8 +184,8 @@ dataset = AirNowAPI.download(
     parameters=["OZONE", "PM25"],
     BBOX=["-77.5", "38.5", "-76.5", "39.5"],    # DC metro area
 )
-print(dataset.data)       # pd.DataFrame of all observations
-print(dataset.metadata)   # pd.DataFrame, one row per monitoring station
+print(dataset.frame)               # pd.DataFrame of all observations (same as the one value in dataset.data)
+print(dataset.metadata["sites"])   # pd.DataFrame, one row per monitoring station
 ```
 
 * **One request per window, you choose the size.** The default window is one day (`chunk="1D"`) because a
@@ -234,13 +235,14 @@ from atmoz.surface import utilities as su
 
 ### `make_datetime(df, time_cols, **kwargs) → pd.Series`
 
-Combine separate date and time columns into a single datetime Series.
+Combine separate date and time columns into a single datetime Series. The date column can be datetimes (as the AQS
+downloader returns it) or text; the time column is text such as `"05:00"`.
 
 ```python
 df["UTC"] = su.make_datetime(df, time_cols={
     "date": "Date GMT",
     "time": "Time GMT",
-    "format": {"date": "%Y-%m-%d ", "time": "%H:%M"},
+    "format": {"date": "%Y-%m-%d", "time": "%H:%M"},  # "date" only matters for text dates
 })
 ```
 

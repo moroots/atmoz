@@ -109,7 +109,7 @@ def test_download_one_request_per_day_in_order(fake_http):
     ds = dl(h, KEY, "2020-01-01", "2020-01-03", silent=True, use_cache=False)
     assert len(h.calls) == 3
     assert all("startDate=2020-01-0" in c[0] and KEY in c[0] for c in h.calls)
-    assert ds.data["UTC"].tolist() == ["2020-01-01T00:00", "2020-01-02T00:00", "2020-01-03T00:00"]
+    assert ds.frame["UTC"].tolist() == ["2020-01-01T00:00", "2020-01-02T00:00", "2020-01-03T00:00"]
 
 
 def test_same_day_range_works(fake_http):
@@ -172,3 +172,13 @@ def test_fetch_writes_parquet_without_the_key(fake_http, tmp_path):
 def test_half_specified_range_is_rejected():
     with pytest.raises(ValueError):
         AirNowAPI.download(start_date="2020-01-01", api_key=KEY)
+
+
+def test_download_returns_dict_of_frames_like_aqs(fake_http):
+    h = fake_http(lambda url, **kw: FakeResponse(200, json_data=[obs("2020-01-01T00:00")]))
+    ds = dl(h, KEY, "2020-01-01", "2020-01-01", silent=True, use_cache=False)
+    assert isinstance(ds.data, dict) and len(ds.data) == 1
+    name = next(iter(ds.data))
+    assert ds.data[name] is ds.frame
+    assert ds.metadata["endpoint"] == "airnow" and ds.metadata["rows"] == {name: 1}
+    assert "sites" in ds.metadata

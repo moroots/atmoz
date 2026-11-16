@@ -108,7 +108,7 @@ class AirNowAPI:
 
     Public entry points:
 
-    * :meth:`download` -> :class:`~atmoz.atmoz_dataset` (``.data`` is one DataFrame, ``.metadata`` a per-site table)
+    * :meth:`download` -> :class:`~atmoz.atmoz_dataset` (``.data`` is ``{name: DataFrame}`` (one frame), ``.metadata["sites"]`` a per-site table)
     * :meth:`fetch`    -> ``{filename: path}`` (the whole query saved as one Parquet file)
 
     Notes:
@@ -258,8 +258,12 @@ class AirNowAPI:
         return metadata
 
     # ---- 5. assemble -----------------------------------------------------------------------
-    def _assemble(self, df: pd.DataFrame) -> atmoz_dataset:
-        return atmoz_dataset(data=df, metadata=self._metadata(df), datatype="surface")
+    def _assemble(self, df: pd.DataFrame, query: dict) -> atmoz_dataset:
+        stamp = lambda s: s.replace(":", "")
+        name = f"airnow_{stamp(query['startDate'])}_{stamp(query['endDate'])}"
+        meta = {"endpoint": "airnow", "files": [name], "rows": {name: len(df)},
+                "start": query["startDate"], "end": query["endDate"], "sites": self._metadata(df)}
+        return atmoz_dataset(data={name: df}, metadata=meta, datatype="surface")
 
     def _collect(self, start_date, end_date, params, *, chunk, max_workers, use_cache, refresh, silent, show_traceback):
         """validate -> load every window on threads -> one DataFrame (+ the query that produced it)."""
@@ -313,9 +317,9 @@ class AirNowAPI:
             MissingCredentialError: if no API key can be found.
         """
         api = cls(api_key, session_handler=session_handler)
-        df, _ = api._collect(start_date, end_date, params, chunk=chunk, max_workers=max_workers,
-                             use_cache=use_cache, refresh=refresh, silent=silent, show_traceback=show_traceback)
-        return api._assemble(df)
+        df, query = api._collect(start_date, end_date, params, chunk=chunk, max_workers=max_workers,
+                                 use_cache=use_cache, refresh=refresh, silent=silent, show_traceback=show_traceback)
+        return api._assemble(df, query)
 
     @classmethod
     def fetch(cls,

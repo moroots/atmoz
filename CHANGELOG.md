@@ -32,6 +32,9 @@ Work after the 0.1.0 commit (planned as 0.1.1).
 - Tests for UCN, plotting, unit conversion and the GEOS-CF cache.
 
 ### Changed
+- **`AirNow.download()` returns the same shape for both endpoints:** `ds.data` is `{name: DataFrame}` and `ds.metadata` a dict.
+  For `endpoint="airnow"` the per-site table moved from `ds.metadata` to `ds.metadata["sites"]`, and the frame is `ds.frame`
+  (new `atmoz_dataset.frame` shortcut for single-frame results).
 - **`atmoz.surface` restructured.** One module per backend, with the same process and names:
   `AQS.py` (`EPA_PreGen`, was `epa_pregen`), `AirNow_API.py` (`AirNowAPI`, `AirNowParams`, `make_windows`) and
   `AirNow.py` (the `AirNow` facade). `AirNow.download(endpoint=...)` is the single entry point and always returns an
@@ -47,6 +50,7 @@ Work after the 0.1.0 commit (planned as 0.1.1).
 - Curtain theme: DejaVu/Inter-style fonts instead of `Courier New`, figure 11 x 4.4 in instead of 20 x 6, smaller labels.
 
 ### Fixed
+- `surface.utilities.make_datetime` raised `TypeError` on the datetime `Date` columns the AQS reader returns; it now takes datetime or text dates.
 - `dataframe.convert_units()` and unit-aware arithmetic raised `NameError` (the pint registry was never defined); it is now built lazily and includes ppbv/ppmv/pptv.
 - `merge_dicts` shared nested dicts with the module defaults, so `TOLNET.plot_curtain` lost its colorbar label and ticks
   after the first call. It now deep-copies, and `apply_plot_params` no longer mutates its input.
@@ -58,8 +62,6 @@ Work after the 0.1.0 commit (planned as 0.1.1).
   `TOLNET.download(GEOS_CF=True)` also calls a name (`models.geos_cf`) that no longer exists.
 - AirNow window logic assumes the API returns the `endDate` hour (inclusive); see `AirNowAPI.window_end_inclusive`. Not yet checked with a live key.
 - `EPA_PARAMETERS` (which parameter has which resolutions) has not been re-checked against EPA's current file list.
-- `atmoz.surface.utilities.make_datetime` (and the matching example in `docs/surface.md`) concatenates date and time as text, which fails now that AQS
-  date columns are datetimes.
 - The UCN download path has been tested offline and on cached files, but its first-time download and conversion have not been run against the live server.
 
 ## [0.1.0] - 2026-11-12

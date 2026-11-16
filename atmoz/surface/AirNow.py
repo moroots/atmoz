@@ -41,12 +41,13 @@ class AirNow:
     @classmethod
     def download(cls, endpoint: str = "airnow", **kwargs) -> atmoz_dataset:
         """
-        The single entry point. Always returns an :class:`~atmoz.atmoz_dataset` (``datatype="surface"``).
+        The single entry point. Always returns an :class:`~atmoz.atmoz_dataset` (``datatype="surface"``), the same shape
+        for both backends: ``ds.data == {name: DataFrame}`` and ``ds.metadata`` is a dict
+        (``endpoint``, ``files``, ``rows``; the AirNow API also adds ``start``, ``end`` and a per-site table ``sites``).
+        ``ds.frame`` returns the DataFrame when there is only one.
 
-        * ``endpoint="airnow"``: ``ds.data`` is one DataFrame, ``ds.metadata`` a per-site DataFrame.
-          Arguments: see :meth:`AirNowAPI.download`.
-        * ``endpoint="aqs"``: ``ds.data`` is ``{filename: DataFrame}``, ``ds.metadata`` a dict
-          describing the request. Arguments: see :meth:`EPA_PreGen.download`.
+        * ``endpoint="airnow"``: arguments: see :meth:`AirNowAPI.download`.
+        * ``endpoint="aqs"``: arguments: see :meth:`EPA_PreGen.download`.
         """
         return cls._backend(endpoint).download(**kwargs)
 

@@ -41,19 +41,25 @@ def make_datetime(
     time_cols: dict = {
         "date": "Date GMT",
         "time": "Time GMT",
-        "format": {"date": "%Y-%m-%d ", "time": "%H:%M"},
+        "format": {"date": "%Y-%m-%d", "time": "%H:%M"},
     },
     **kwargs,
 ) -> pd.Series:
-    """Combine separate date and time columns into a single datetime Series."""
+    """Combine separate date and time columns into a single datetime Series.
+
+    The date column may already be datetimes (as ``EPA_PreGen`` returns it) or text in ``format["date"]``;
+    the time column is text in ``format["time"]`` (default ``HH:MM``). Text and ``category`` columns both work.
+    """
     if not isinstance(time_cols, dict):
         raise TypeError("time_cols must be a dict")
     if not isinstance(df, pd.DataFrame):
         raise TypeError("df must be a pandas DataFrame")
-    return pd.to_datetime(
-        df[time_cols["date"]] + " " + df[time_cols["time"]],
-        format=time_cols["format"]["date"] + time_cols["format"]["time"],
-    )
+    fmt = time_cols.get("format", {})
+    date = df[time_cols["date"]]
+    if not pd.api.types.is_datetime64_any_dtype(date):
+        date = pd.to_datetime(date.astype(str).str.strip(), format=(fmt.get("date") or "%Y-%m-%d").strip())
+    time = pd.to_datetime(df[time_cols["time"]].astype(str).str.strip(), format=fmt.get("time") or "%H:%M")
+    return date.dt.normalize() + (time - time.dt.normalize())
 
 
 def get_resolution(
