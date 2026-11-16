@@ -37,7 +37,7 @@ Cache the raw file as parquet. Filters apply to the cached parquet before the pe
 
 ## Out of scope for now
 
-Publishing to PyPI and release housekeeping. Version stays 0.1.0 until then (nothing has been published to PyPI, so 0.1.0 is free). The marama_2026 analysis lives in its own repo.
+Publishing to PyPI and release housekeeping. Version is 0.1.1 (nothing has been published to PyPI). The marama_2026 analysis lives in its own repo.
 
 ## Altitude references
 
@@ -52,5 +52,5 @@ they differ and raises when a reference or elevation is missing.
 * `Sonde.read(path)`: NASA LaRC STAQS `.ict` files to an AtmozDataset (one frame per flight, per-row lat/lon, asl).
 * `atmoz.stats`: `compare`, `exceedances`, `diurnal`, `trend`. `atmoz.vertical`: `layer_mean`, `mean_profile`.
 * `atmoz.met` (extra `atmoz[met]`): theta, dewpoint, PBL height, wind components, Skew-T plot.
-* New plots follow the existing styled pattern. All of it is part of the stable 0.1.0 surface, so only what is solid ships.
+* New plots follow the existing styled pattern. All of it is part of the stable 0.1.1 surface, so only what is solid ships.
 * Bar: offline tests plus one real-data check per source.

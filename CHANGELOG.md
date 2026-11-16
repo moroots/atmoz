@@ -6,9 +6,13 @@ All notable changes to atmoz are documented here. The format follows
 
 ## [Unreleased]
 
-Everything below ships in 0.1.0, which has not been published yet.
+## [0.1.1] - 2026-11-16
+
+Everything below is new since 0.1.0.
 
 ### Added
+- Documentation site is built and published from CI (GitLab Pages and GitHub Pages) on every push to `main`; `mkdocs build --strict` runs on all pipelines.
+- Atmoz logo, favicon and brand palette in the docs site and README.
 - **One data shape for every source.** `atmoz.AtmozFrame` (a pandas DataFrame with a UTC `DatetimeIndex` as time axis `t`, `lat` / `lon` / `alt` (km)
   axis columns, `units` per column and a `metadata` dict) and `atmoz.AtmozDataset` (a named collection of frames sharing one axis schema, units per frame).
   `ds[key]`, `ds.select("*/OZONE")`, `ds.frame` (the only frame), `frame.loc` / `frame.iloc` (keep the frame), `ds.inventory()` (one row per frame: lat, lon, altitude range, units, time span),
