@@ -244,6 +244,12 @@ styles.register(atmoz_style.replace(
 ))
 
 styles.register(atmoz_style.replace(
+    name="exceedances",
+    figsize=(8, 4.2),
+    description="Bar charts of exceedance days per site.",
+))
+
+styles.register(atmoz_style.replace(
     name="skewt",
     figsize=(6.5, 6.5),
     description="Skew-T log-p diagrams (MetPy).",

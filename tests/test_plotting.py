@@ -61,7 +61,7 @@ def test_unknown_style_suggests_the_right_name():
 def test_plot_lists_itself():
     text = repr(plot)
     assert all(name in text for name in ("curtain", "profile", "windrose", "site_map"))
-    assert set(dir(plot)) == {"curtain", "profile", "windrose", "site_map", "skewt"}
+    assert set(dir(plot)) == {"curtain", "profile", "windrose", "site_map", "skewt", "comparison_profile", "exceedances"}
 
 
 def test_import_is_light():
@@ -214,4 +214,47 @@ def test_curtain_accepts_a_long_atmoz_frame():
     fig, ax = curtain(af)
     fig2, _ = curtain({"day": af})
     assert fig is not None and fig2 is not None
+    plt.close("all")
+
+
+def test_comparison_profile_and_exceedances():
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    from atmoz import AtmozDataset, AtmozFrame
+    from atmoz import stats
+
+    t = pd.DatetimeIndex(["2024-07-01 00:00", "2024-07-01 01:00"], tz="UTC", name="time")
+    rows = [(tt, a, 10.0 + 5 * a, 12.0 + 5 * a) for tt in t for a in (0.5, 1.5, 2.5)]
+    df = pd.DataFrame(rows, columns=["time", "alt", "lidar", "model"]).set_index("time")
+    af = AtmozFrame(df, units={"lidar": "ppb", "alt": "km"}, alt="alt",
+                    metadata={"alt_reference": "agl", "columns": {"lidar": "value", "model": "value"}})
+    fig, ax = plot.comparison_profile(af, bins=1.0)
+    assert [ln.get_label() for ln in ax.get_lines()] == ["lidar", "model"] and "AGL" in ax.get_ylabel()
+    fig2, _ = plot.comparison_profile(AtmozDataset(frames={"a": af, "b": af}), columns=["model"])
+    with pytest.raises(KeyError):
+        plot.comparison_profile(af, columns=["nope"])
+    with pytest.raises(ValueError):
+        plot.comparison_profile(AtmozFrame(df.drop(columns="alt")))
+
+    days = pd.date_range("2024-07-01", periods=3)
+    table = pd.DataFrame({"State Code": ["24", "24"], "Site Num": ["1004", "1007"], "date": days[:2],
+                          "mda8": [0.08, 0.06], "n_averages": 17, "valid": True, "start_hour": 10})
+    summary = stats.exceedances(table, units="ppm")
+    fig3, ax3 = plot.exceedances(summary)
+    assert len(ax3.patches) == 2 and "70" in ax3.get_title("left")
+    with pytest.raises(KeyError):
+        plot.exceedances(table)
+    plt.close("all")
+
+
+def test_comparison_profile_ylim_clips_the_data():
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    from atmoz import AtmozFrame
+
+    t = pd.DatetimeIndex(["2024-07-01 00:00"], tz="UTC", name="time")
+    df = pd.DataFrame({"alt": [0.5, 1.5, 15.5], "obs": [40.0, 50.0, 900.0], "model": [41.0, 51.0, 950.0]}, index=t.repeat(3))
+    af = AtmozFrame(df, units={"obs": "ppb"}, alt="alt", metadata={"alt_reference": "agl"})
+    fig, ax = plot.comparison_profile(af, ylim=(0, 5))
+    assert ax.get_xlim()[1] < 200
     plt.close("all")

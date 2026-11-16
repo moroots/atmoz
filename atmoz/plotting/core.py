@@ -19,6 +19,9 @@ from atmoz.plotting.styles import _DEFAULT, Style, resolve_style
 _PLOTS: dict[str, tuple[str, str, str, str]] = {
     "curtain": ("atmoz.plotting.curtain", "curtain", "matplotlib", "Time-altitude curtain (lidar, ceilometer, model)."),
     "profile": ("atmoz.plotting.profile", "profile", "matplotlib", "Vertical profiles with optional uncertainty."),
+    "comparison_profile": ("atmoz.plotting.compare", "comparison_profile", "matplotlib",
+                           "Mean profiles of collocated sources with their spread."),
+    "exceedances": ("atmoz.plotting.compare", "exceedances", "matplotlib", "Days above the ozone standard per site."),
     "windrose": ("atmoz.plotting.windrose", "windrose", "matplotlib", "Wind rose from direction and speed."),
     "skewt": ("atmoz.met", "skewt", "matplotlib", "Skew-T log-p diagram of a sonde or model profile (needs atmoz[met])."),
     "site_map": ("atmoz.plotting.sitemap", "site_map", "plotly", "Interactive map of site locations."),
