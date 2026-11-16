@@ -22,6 +22,8 @@ _LAZY = {
     "AtmozDataset": ("atmoz.dataclasses.AtmozDataset", "AtmozDataset"),
     "collocate": ("atmoz.collocation", "collocate"),
     "Sonde": ("atmoz.sonde", "Sonde"),
+    "stats": ("atmoz.stats", None),
+    "vertical": ("atmoz.vertical", None),
     "set_secret": ("atmoz.resources.credentials", "set_secret"),
     "get_secret": ("atmoz.resources.credentials", "get_secret"),
     "delete_secret": ("atmoz.resources.credentials", "delete_secret"),
