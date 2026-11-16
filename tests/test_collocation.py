@@ -72,7 +72,7 @@ def test_bad_input_raises():
     with pytest.raises(TypeError):
         atmoz.collocate(surface.df, surface)
     with pytest.raises(KeyError):
-        atmoz.collocate(surface, surface, obs_col="nope")
+        atmoz.collocate(surface, surface, cols="nope")
 
 
 def test_surface_obs_with_model_profile_uses_lowest_level_or_alt():
@@ -81,7 +81,7 @@ def test_surface_obs_with_model_profile_uses_lowest_level_or_alt():
     obs = AtmozFrame(pd.DataFrame({"value": [5.0, 6.0]}, index=idx), units={"value": "ppb"})
     low = atmoz.collocate(obs, model)
     assert np.allclose(low.df["model"], [1.0, 1.0]) and low.axes["alt"] is None
-    assert low.metadata["model"]["reduced_to_surface"] == "lowest level"
+    assert low.metadata["sources"]["model"]["reduced_to_surface"] == "lowest level"
     at = atmoz.collocate(obs, model, alt=1.5)
     assert np.allclose(at.df["model"], [15.0, 15.0])
 
@@ -92,7 +92,7 @@ def test_profile_obs_with_surface_model_is_reduced_to_the_obs_surface():
     model = AtmozFrame(pd.DataFrame({"value": [1.0, 3.0]}, index=idx), units={"value": "ppb"})
     out = atmoz.collocate(obs, model)
     assert np.allclose(out.df["obs"], [20.0, 20.0]) and np.allclose(out.df["model"], [1.0, 3.0])
-    assert out.metadata["obs"]["reduced_to_surface"] == "lowest level"
+    assert out.metadata["sources"]["obs"]["reduced_to_surface"] == "lowest level"
 
 
 def test_asl_lidar_is_converted_to_agl_before_comparing():
@@ -133,3 +133,102 @@ def test_with_alt_reference_round_trip():
     assert np.allclose(agl.with_alt_reference("asl").df["alt"], [1.0, 2.0])
     with pytest.raises(ValueError):
         f.with_alt_reference("msl")
+
+
+# ---- multi-source, sondes, vertical methods, datasets ----------------------------------------------------------------
+
+from atmoz import AtmozDataset
+
+
+def sonde_frame(start, alts, f, ref="agl", lat=39.0, lon=-76.0, minutes_per_point=0.5):
+    """One flight: every row has its own time (a trajectory), per-row lat/lon."""
+    times = pd.DatetimeIndex([pd.Timestamp(start, tz="UTC") + pd.Timedelta(minutes=minutes_per_point * i) for i in range(len(alts))],
+                             name="time")
+    df = pd.DataFrame({"alt": alts, "value": [f(a) for a in alts], "lat": lat, "lon": lon}, index=times)
+    return AtmozFrame(df, units={"value": "ppb", "alt": "km"}, lat="lat", lon="lon", alt="alt", metadata={"alt_reference": ref})
+
+
+def test_list_form_and_three_sources_with_names():
+    t = pd.DatetimeIndex(["2024-07-01 00:00"], tz="UTC")
+    lidar = profile_frame(t, [0.5, 1.5, 2.5], lambda tt, a: 1.0)
+    model = profile_frame(t, [0.0, 1.0, 2.0, 3.0], lambda tt, a: 10 * a)
+    sonde = sonde_frame("2024-07-01 00:00", np.arange(0.0, 3.01, 0.1), lambda a: 100 * a)
+    out = atmoz.collocate([lidar, model, sonde], names=["lidar", "model", "sonde"], window="30min")
+    assert list(out.df.columns) == ["alt", "lat", "lon", "lidar", "model", "sonde"]
+    assert np.allclose(out.df["model"], [5.0, 15.0, 25.0])
+    assert np.allclose(out.df["sonde"], [45.0, 145.0, 245.0], atol=1.0)       # bin means of 0.1 km points
+    assert out.metadata["method"] == "auto" and set(out.metadata["sources"]) == {"lidar", "model", "sonde"}
+    same = atmoz.collocate(lidar, model, sonde, names=["lidar", "model", "sonde"], window="30min")
+    assert same.df.equals(out.df)
+
+
+def test_trajectory_is_averaged_in_the_time_window_only():
+    t = pd.DatetimeIndex(["2024-07-01 00:00"], tz="UTC")
+    lidar = profile_frame(t, [0.5, 1.5], lambda tt, a: 1.0)
+    sonde = sonde_frame("2024-07-01 00:00", np.arange(0.0, 2.01, 0.25), lambda a: 10 * a, minutes_per_point=10)
+    near = atmoz.collocate(lidar, sonde, window="25min").df["model"].to_numpy()
+    assert np.isfinite(near[0]) and np.isnan(near[1])           # only points within 25 min (alt <= 0.75 km) are used
+    assert np.isfinite(atmoz.collocate(lidar, sonde, window="3h").df["model"]).all()
+
+
+def test_auto_uses_bin_mean_for_finer_profiles_and_interp_for_coarser():
+    t = pd.DatetimeIndex(["2024-07-01 00:00"], tz="UTC")
+    coarse_anchor = profile_frame(t, [0.0, 1.0, 2.0], lambda tt, a: 0.0)
+    fine = profile_frame(t, np.arange(0.0, 2.01, 0.1), lambda tt, a: 0.0 if a < 0.5 else 100.0)
+    auto = atmoz.collocate(coarse_anchor, fine).df["model"].to_numpy()
+    mean = atmoz.collocate(coarse_anchor, fine, method="mean").df["model"].to_numpy()
+    interp = atmoz.collocate(coarse_anchor, fine, method="interp").df["model"].to_numpy()
+    assert np.allclose(auto, mean, equal_nan=True) and mean[0] == 0.0 and mean[1] == 100.0
+    assert np.isclose(interp[1], 100.0)
+    fine_anchor = profile_frame(t, np.arange(0.0, 2.01, 0.1), lambda tt, a: 0.0)
+    coarse = profile_frame(t, [0.0, 1.0, 2.0], lambda tt, a: 10 * a)
+    assert np.allclose(atmoz.collocate(fine_anchor, coarse).df["model"], np.arange(0.0, 2.01, 0.1) * 10)
+
+
+def test_bad_arguments():
+    t = pd.DatetimeIndex(["2024-07-01 00:00"], tz="UTC")
+    p = profile_frame(t, [0.0, 1.0], lambda tt, a: a)
+    with pytest.raises(ValueError, match="at least two"):
+        atmoz.collocate([p])
+    with pytest.raises(ValueError, match="method"):
+        atmoz.collocate(p, p, method="nearest")
+    with pytest.raises(ValueError, match="names"):
+        atmoz.collocate(p, p, names=["a", "a"])
+
+
+def site_dataset(sites, hours=3, ref="agl"):
+    frames = {}
+    for key, (lat, lon, start) in sites.items():
+        idx = pd.date_range(start, periods=hours, freq="1h", tz="UTC", name="time")
+        df = pd.DataFrame({"value": np.arange(hours, dtype=float), "lat": lat, "lon": lon}, index=idx)
+        frames[key] = AtmozFrame(df, units={"value": "ppb"}, lat="lat", lon="lon")
+    return AtmozDataset("x", "src", frames)
+
+
+def test_datasets_pair_by_nearest_site_and_report_unpaired():
+    surface = site_dataset({"near": (39.0, -76.5, "2024-07-01"), "far": (45.0, -100.0, "2024-07-01")})
+    other = site_dataset({"A": (39.05, -76.5, "2024-07-01"), "B": (30.0, -90.0, "2024-07-01")})
+    out = atmoz.collocate(surface, other)
+    assert isinstance(out, AtmozDataset) and list(out) == ["near"]
+    assert out.metadata["pairs"] == {"near": {"model": "A"}} and out.metadata["unpaired"] == {"far": ["model"]}
+    assert np.allclose(out["near"].df["model"], [0.0, 1.0, 2.0])
+    assert len(atmoz.collocate(surface, other, max_distance_km=2000.0)) == 2
+
+
+def test_dataset_tie_between_files_at_one_site_prefers_time_overlap():
+    surface = site_dataset({"s": (39.0, -76.5, "2024-07-02")})
+    other = site_dataset({"old": (39.0, -76.5, "2024-07-01"), "new": (39.0, -76.5, "2024-07-02")}, hours=3)
+    out = atmoz.collocate(surface, other)
+    assert out.metadata["pairs"]["s"]["model"] == "new"
+
+
+def test_frame_anchor_with_datasets_and_three_way():
+    anchor = AtmozFrame(pd.DataFrame({"value": [1.0, 2.0], "lat": 39.0, "lon": -76.5},
+                                     index=pd.date_range("2024-07-01", periods=2, freq="1h", tz="UTC", name="time")),
+                        units={"value": "ppb"}, lat="lat", lon="lon")
+    a = site_dataset({"A": (39.0, -76.5, "2024-07-01")})
+    b = site_dataset({"B": (39.1, -76.5, "2024-07-01")})
+    out = atmoz.collocate([anchor, a, b], names=["x", "a", "b"])
+    assert isinstance(out, AtmozFrame) and list(out.df.columns)[-3:] == ["x", "a", "b"]
+    with pytest.raises(ValueError, match="No frame within"):
+        atmoz.collocate(anchor, site_dataset({"far": (10.0, 10.0, "2024-07-01")}))

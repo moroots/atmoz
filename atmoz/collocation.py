@@ -1,175 +1,395 @@
-"""Collocate model output onto observations: same times, same altitudes, same units.
+"""Collocate several sources onto one: same times, same altitudes, same units.
 
->>> out = atmoz.collocate(tolnet_frame, geos_cf_frame)       # AtmozFrame with columns obs, model
->>> out.df[["alt", "obs", "model"]]
+>>> out = atmoz.collocate([lidar_frame, model_frame, sonde_frame])          # the first source is the anchor
+>>> out = atmoz.collocate(tolnet_ds, geos_cf_ds, aqs_ds)                      # datasets pair by nearest site
+>>> out.df[["alt", "obs", "model", "src3"]]
 
-* **time**: for every observation time the model is interpolated linearly between its two nearest times; observations farther
-  than *max_gap* from either neighbour get NaN.
-* **altitude reference**: profile altitudes must say what they are measured from (``frame.alt_reference``, "asl" above sea
-  level or "agl" above ground; TOLNet is asl with the instrument elevation in the metadata, GEOS-CF is agl). When the
-  two differ, the asl side is converted to above ground with its ``site_elevation_km``; the result is then in agl. Missing
+The **anchor** (the first source) defines the grid. Every other source is brought onto the anchor's rows:
+
+* **time**: a source made of profiles at discrete times (a model, a lidar) is interpolated linearly between its two nearest
+  times, and gives NaN when the anchor time is farther than *max_gap* from either. A source that is one continuous
+  trajectory (a sonde: every row has its own time) is averaged over the rows within *window* of the anchor time.
+* **altitude** (profiles): each other profile is brought onto the anchor's levels with *method*: ``"interp"`` (linear in
+  altitude), ``"mean"`` (average of the points falling in each anchor level's bin) or ``"auto"`` (default: ``mean`` when the
+  other profile is finer than the anchor, ``interp`` when it is coarser). NaN outside the other profile's altitude range.
+* **altitude reference**: profile altitudes must say what they are measured from (``frame.alt_reference``: ``"asl"`` or
+  ``"agl"``). When they differ the asl side is converted to above ground with its ``site_elevation_km``; missing
   information raises an error instead of guessing.
-* **altitude** (profiles): each model profile is interpolated onto the observation altitudes using the model's own ``alt``
-  column (which may differ per time, as GEOS-CF layer heights do). Outside the model's altitude range the result is NaN.
-* **units**: the model column is converted to the observation unit when both are declared and differ.
-* A surface series can be collocated with a profile: the profile side is first reduced to a surface series (its lowest valid
-  level at each time, or its value interpolated to *alt* km), then the usual time collocation runs on the surface
-  frame's times. Two profiles are collocated level by level; two surface series in time only.
+* **units**: every column is converted to the anchor's unit when both are declared and differ.
+* **surface and profile together**: if any source is a surface series (no ``alt``), the comparison is made at the surface:
+  profiles are first reduced to their lowest valid level at each time, or to *alt* km.
+* **datasets**: frames are paired by location, the nearest frame of each other dataset within *max_distance_km*. The result is an
+  :class:`AtmozDataset` keyed by the anchor's keys; ``metadata["pairs"]`` records the pairing and ``metadata["unpaired"]``
+  the anchor frames that found no partner.
 """
 
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Dict, List, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
 
+from atmoz.dataclasses.AtmozDataset import AtmozDataset
 from atmoz.dataclasses.AtmozFrame import AtmozFrame
 
+Source = Union[AtmozFrame, AtmozDataset]
 
-def _profile_at(alts: np.ndarray, values: np.ndarray, at: np.ndarray) -> np.ndarray:
-    """Interpolate one profile (alts, values) onto *at*; NaN outside the profile's range and where values are NaN."""
-    ok = np.isfinite(alts) & np.isfinite(values)
-    if ok.sum() < 2:
-        return np.full(len(at), np.nan)
-    order = np.argsort(alts[ok])
-    return np.interp(at, alts[ok][order], values[ok][order], left=np.nan, right=np.nan)
+
+# ---- profiles and trajectories ------------------------------------------------------------------------------------------
+
+
+def _is_profile_set(af: AtmozFrame) -> bool:
+    """True when the frame holds profiles at discrete times (a timestamp repeats once per level), false for a trajectory."""
+    if af.axes["alt"] is None or len(af.df) == 0:
+        return False
+    return float(af.df.groupby(level=0).size().median()) > 1
+
+
+def _bins(levels: np.ndarray) -> np.ndarray:
+    """Bin edges around sorted *levels* (midpoints, extended half a step at each end)."""
+    first = levels[0] - (levels[1] - levels[0]) / 2
+    last = levels[-1] + (levels[-1] - levels[-2]) / 2
+    return np.concatenate([[first], (levels[:-1] + levels[1:]) / 2, [last]])
+
+
+def _to_levels(src_alt: np.ndarray, src_val: np.ndarray, at: np.ndarray, method: str) -> np.ndarray:
+    """One source profile (alt, value) -> values at the levels *at*; NaN where it has nothing."""
+    ok = np.isfinite(src_alt) & np.isfinite(src_val)
+    out = np.full(len(at), np.nan)
+    if not ok.any() or len(at) == 0:
+        return out
+    a, v = src_alt[ok], src_val[ok]
+    if method == "auto":
+        at_step = np.median(np.diff(np.sort(at))) if len(at) > 1 else np.inf
+        src_step = np.median(np.diff(np.sort(a))) if len(a) > 1 else np.inf
+        method = "mean" if len(at) > 1 and src_step < 0.75 * at_step else "interp"
+    if method == "mean" and len(at) > 1:
+        order = np.argsort(at)
+        edges = _bins(at[order])
+        idx = np.digitize(a, edges) - 1
+        inside = (idx >= 0) & (idx < len(at))
+        sums = np.bincount(idx[inside], weights=v[inside], minlength=len(at))
+        counts = np.bincount(idx[inside], minlength=len(at))
+        with np.errstate(invalid="ignore", divide="ignore"):
+            res = np.where(counts > 0, sums / counts, np.nan)
+        out[order] = res
+        return out
+    if len(a) < 2:
+        return out
+    order = np.argsort(a)
+    return np.interp(at, a[order], v[order], left=np.nan, right=np.nan)
 
 
 def _surface_of(af: AtmozFrame, col: str, alt: Optional[float]) -> AtmozFrame:
-    """A profile frame reduced to a surface series: the lowest valid level per time, or the value interpolated to *alt* km."""
+    """A profile frame reduced to a surface series: the lowest valid level (or the value at *alt* km) at each time.
+
+    A trajectory (a sonde) is one profile: it reduces to a single row at the time of that level.
+    """
     altname = af.axes["alt"]
-    parts = []
-    for t, g in af.df.groupby(level=0, sort=True):
+    df = af.df
+    rows = []
+    if _is_profile_set(af):
+        groups = list(df.groupby(level=0, sort=True))
+    else:
+        groups = [(None, df)]
+    for t, g in groups:
         a, v = g[altname].to_numpy(dtype=float), g[col].to_numpy(dtype=float)
+        ok = np.isfinite(a) & np.isfinite(v)
         if alt is None:
-            ok = np.isfinite(a) & np.isfinite(v)
-            val = v[ok][np.argmin(a[ok])] if ok.any() else np.nan
+            if not ok.any():
+                rows.append((t if t is not None else g.index[0], np.nan, g))
+                continue
+            i = np.flatnonzero(ok)[np.argmin(a[ok])]
+            rows.append((t if t is not None else g.index[i], v[i], g))
         else:
-            val = _profile_at(a, v, np.array([alt]))[0]
-        row = {col: val}
-        for key in ("lat", "lon"):
-            if af.axes[key] is not None:
-                row[af.axes[key]] = g[af.axes[key]].iloc[0]
-        parts.append((t, row))
-    df = pd.DataFrame([r for _, r in parts], index=pd.DatetimeIndex([t for t, _ in parts], name=af.df.index.name))
-    units = {k: v for k, v in af.units.items() if k in df.columns}
-    return AtmozFrame(df, units=units, lat=af.axes["lat"], lon=af.axes["lon"],
+            val = _to_levels(a, v, np.array([alt]), "interp")[0]
+            when = t if t is not None else g.index[np.argmin(np.abs(np.where(ok, a, np.inf) - alt))]
+            rows.append((when, val, g))
+    out = pd.DataFrame({col: [r[1] for r in rows]}, index=pd.DatetimeIndex([r[0] for r in rows], name=df.index.name))
+    for key in ("lat", "lon"):
+        name = af.axes[key]
+        if name is not None:
+            out[name] = [float(r[2][name].median()) for r in rows]
+    units = {k: v for k, v in af.units.items() if k in out.columns}
+    return AtmozFrame(out, units=units, lat=af.axes["lat"], lon=af.axes["lon"],
                       metadata={**af.metadata, "reduced_to_surface": "lowest level" if alt is None else f"{alt} km"})
 
 
-def _common_reference(obs: AtmozFrame, model: AtmozFrame):
-    """Express both profiles' altitudes in the same reference (above ground when they differ), or explain what is missing."""
-    ro, rm = obs.alt_reference, model.alt_reference
-    if ro is None or rm is None:
-        missing = " and ".join(n for n, r in (("obs", ro), ("model", rm)) if r is None)
+def _common_reference(frames: List[AtmozFrame], names: List[str]) -> List[AtmozFrame]:
+    """Express every profile's altitude in the same reference (above ground when they differ), or explain what is missing."""
+    refs = [f.alt_reference for f in frames]
+    if any(r is None for r in refs):
+        missing = ", ".join(n for n, r in zip(names, refs) if r is None)
         raise ValueError(f"The altitude reference of {missing} is not stated, so the profiles cannot be aligned safely. "
                          "Set it with frame.with_metadata(alt_reference='asl' or 'agl', site_elevation_km=...), or pass "
-                         "assume_same_reference=True if you know both are measured from the same level.")
-    if ro == rm:
-        return obs, model
-    return obs.with_alt_reference("agl"), model.with_alt_reference("agl")
+                         "assume_same_reference=True if you know they are measured from the same level.")
+    if len(set(refs)) == 1:
+        return frames
+    return [f.with_alt_reference("agl") for f in frames]
+
+
+# ---- one source onto the anchor's rows ----------------------------------------------------------------------------------
+
+
+def _series_onto(times: pd.DatetimeIndex, other: pd.Series, gap: pd.Timedelta) -> np.ndarray:
+    """Linear time interpolation of a surface series onto *times*; NaN beyond *gap* of either neighbour."""
+    s = other.groupby(level=0).mean().sort_index()
+    mt = s.index.as_unit("ns").asi8
+    mv = s.to_numpy(dtype=float)
+    at = times.as_unit("ns").asi8
+    out = np.full(len(at), np.nan)
+    if len(mt) == 0:
+        return out
+    k = np.searchsorted(mt, at)
+    exact = (k < len(mt)) & (mt[np.minimum(k, len(mt) - 1)] == at)
+    out[exact] = mv[k[exact]]
+    inner = ~exact & (k > 0) & (k < len(mt))
+    lo, hi = k[inner] - 1, k[inner]
+    t_lo, t_hi, t = mt[lo], mt[hi], at[inner]
+    near = (t - t_lo <= gap.value) & (t_hi - t <= gap.value)
+    w = (t - t_lo) / (t_hi - t_lo)
+    vals = (1 - w) * mv[lo] + w * mv[hi]
+    vals[~near] = np.nan
+    out[inner] = vals
+    return out
+
+
+def _profiles_onto(anchor: AtmozFrame, other: AtmozFrame, col: str, gap: pd.Timedelta, window: pd.Timedelta,
+                   method: str) -> np.ndarray:
+    adf, odf = anchor.df, other.df
+    aalt = adf[anchor.axes["alt"]].to_numpy(dtype=float)
+    oalt = odf[other.axes["alt"]].to_numpy(dtype=float)
+    oval = odf[col].to_numpy(dtype=float)
+    result = np.full(len(adf), np.nan)
+    positions = pd.Series(np.arange(len(adf)), index=adf.index)
+    discrete = _is_profile_set(other)
+    if discrete:
+        o_times = pd.DatetimeIndex(odf.index.unique()).sort_values()
+        mt = o_times.as_unit("ns").asi8
+        rows_at = {t: np.flatnonzero(odf.index == t) for t in o_times}
+    else:
+        o_ns = odf.index.as_unit("ns").asi8
+        order = np.argsort(o_ns, kind="stable")
+        o_ns, oalt, oval = o_ns[order], oalt[order], oval[order]
+
+    def profile(i: int, levels: np.ndarray) -> np.ndarray:
+        r = rows_at[o_times[i]]
+        return _to_levels(oalt[r], oval[r], levels, method)
+
+    for t, pos in positions.groupby(level=0):
+        rows = pos.to_numpy()
+        levels = aalt[rows]
+        tv = t.as_unit("ns").value
+        if not discrete:
+            lo = np.searchsorted(o_ns, tv - window.value, side="left")
+            hi = np.searchsorted(o_ns, tv + window.value, side="right")
+            if hi > lo:
+                result[rows] = _to_levels(oalt[lo:hi], oval[lo:hi], levels, "mean" if method == "auto" else method)
+            continue
+        k = np.searchsorted(mt, tv)
+        if k < len(mt) and mt[k] == tv:
+            result[rows] = profile(k, levels)
+        elif 0 < k < len(mt) and tv - mt[k - 1] <= gap.value and mt[k] - tv <= gap.value:
+            w = (tv - mt[k - 1]) / (mt[k] - mt[k - 1])
+            result[rows] = (1 - w) * profile(k - 1, levels) + w * profile(k, levels)
+    return result
+
+
+# ---- frames ------------------------------------------------------------------------------------------------------------
+
+
+def _names_for(sources: Sequence[Source], names: Optional[Sequence[str]]) -> List[str]:
+    n = len(sources)
+    if names is not None:
+        if len(names) != n or len(set(names)) != n:
+            raise ValueError(f"names must be {n} distinct strings, got {list(names)!r}.")
+        return list(names)
+    return [("obs", "model")[i] if i < 2 else f"src{i + 1}" for i in range(n)]
+
+
+def _cols_for(cols: Union[str, Sequence[str], Dict[str, str]], names: List[str]) -> List[str]:
+    if isinstance(cols, str):
+        return [cols] * len(names)
+    if isinstance(cols, dict):
+        return [cols.get(n, "value") for n in names]
+    if len(cols) != len(names):
+        raise ValueError("cols must be one name or one per source.")
+    return list(cols)
+
+
+def _collocate_frames(frames: List[AtmozFrame], names: List[str], cols: List[str], *, max_gap, window, method, alt,
+                      assume_same_reference) -> AtmozFrame:
+    for n, af, c in zip(names, frames, cols):
+        if not isinstance(af, AtmozFrame):
+            raise TypeError(f"{n} must be an AtmozFrame or AtmozDataset, got {type(af).__name__}.")
+        if c not in af.df.columns:
+            raise KeyError(f"Column {c!r} of {n} is not in the frame (columns: {list(af.df.columns)}).")
+    gap, win = pd.Timedelta(max_gap), pd.Timedelta(window)
+    has_alt = [f.axes["alt"] is not None for f in frames]
+    if any(has_alt) and not all(has_alt):
+        frames = [_surface_of(f, c, alt) if h else f for f, c, h in zip(frames, cols, has_alt)]
+    elif all(has_alt) and not assume_same_reference:
+        frames = _common_reference(frames, names)
+    profiles = frames[0].axes["alt"] is not None
+    anchor = frames[0]
+    base_unit = anchor.units.get(cols[0])
+    out: Dict[str, np.ndarray] = {}
+    units: Dict[str, str] = {}
+    out[names[0]] = anchor.df[cols[0]].to_numpy(dtype=float)
+    if base_unit:
+        units[names[0]] = base_unit
+    for n, af, c in zip(names[1:], frames[1:], cols[1:]):
+        other = af
+        unit = af.units.get(c)
+        if base_unit and unit and unit != base_unit:
+            other = af.convert_units(c, base_unit)
+            unit = base_unit
+        if profiles:
+            out[n] = _profiles_onto(anchor, other, c, gap, win, method)
+        else:
+            out[n] = _series_onto(anchor.df.index, other.df[c], gap)
+        if unit:
+            units[n] = unit
+    data = {}
+    for key in ("alt", "lat", "lon"):
+        src = anchor.axes[key]
+        if src is not None:
+            data[key] = anchor.df[src].to_numpy()
+            if src in anchor.units:
+                units[key] = anchor.units[src]
+    data.update(out)
+    ref = anchor.alt_reference if profiles else None
+    meta = {**({"alt_reference": ref} if ref else {}),
+            **({"site_elevation_km": anchor.metadata["site_elevation_km"]}
+               if ref and anchor.metadata.get("site_elevation_km") is not None else {}),
+            "sources": {n: dict(f.metadata) for n, f in zip(names, frames)},
+            "columns": dict(zip(names, cols)), "max_gap": str(gap), "window": str(win), "method": method}
+    return AtmozFrame(pd.DataFrame(data, index=anchor.df.index), units=units, metadata=meta,
+                      **{k: k for k in ("lat", "lon", "alt") if k in data})
+
+
+# ---- datasets ----------------------------------------------------------------------------------------------------------
+
+
+def _distance_km(a: tuple, b: tuple) -> float:
+    lat1, lon1, lat2, lon2 = map(np.radians, (a[0], a[1], b[0], b[1]))
+    h = np.sin((lat2 - lat1) / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2) ** 2
+    return float(2 * 6371.0088 * np.arcsin(np.sqrt(h)))
+
+
+def _overlap(a: AtmozFrame, b: AtmozFrame) -> float:
+    if len(a.df) == 0 or len(b.df) == 0:
+        return 0.0
+    lo, hi = max(a.df.index.min(), b.df.index.min()), min(a.df.index.max(), b.df.index.max())
+    return max((hi - lo).total_seconds(), 0.0)
+
+
+def _nearest(anchor: AtmozFrame, ds: AtmozDataset, max_km: float, tie_km: float = 1.0) -> Optional[str]:
+    """The key of the frame of *ds* nearest to *anchor*; among near-ties (same site) the one overlapping it most in time."""
+    here = anchor.location
+    if here is None:
+        raise ValueError("Pairing datasets needs the anchor's lat/lon (set lat= and lon= axes on its frames).")
+    cands = []
+    for key, f in ds.items():
+        loc = f.location
+        if loc is not None:
+            d = _distance_km(here, loc)
+            if d <= max_km:
+                cands.append((d, key, f))
+    if not cands:
+        return None
+    nearest = min(c[0] for c in cands)
+    close = [c for c in cands if c[0] <= nearest + tie_km]
+    return max(close, key=lambda c: (_overlap(anchor, c[2]), -c[0]))[1]
 
 
 def collocate(
-    obs: AtmozFrame,
-    model: AtmozFrame,
-    *,
-    obs_col: str = "value",
-    model_col: str = "value",
+    sources: Union[Source, Sequence[Source]],
+    *more: Source,
+    names: Optional[Sequence[str]] = None,
+    cols: Union[str, Sequence[str], Dict[str, str]] = "value",
     max_gap: Union[str, pd.Timedelta] = "1h",
+    window: Union[str, pd.Timedelta] = "10min",
+    method: str = "auto",
     alt: Optional[float] = None,
+    max_distance_km: float = 25.0,
     assume_same_reference: bool = False,
-) -> AtmozFrame:
-    """Interpolate *model* onto the times (and altitudes) of *obs*.
+) -> Union[AtmozFrame, AtmozDataset]:
+    """Bring several sources onto the first one (the anchor): its times, altitudes and unit.
 
     Parameters
     ----------
-    obs, model:
-        :class:`AtmozFrame` objects: profiles (an ``alt`` axis), surface series, or one of each (the profile is reduced
-        to a surface series first, see *alt*).
-    obs_col, model_col:
-        The columns to compare.
+    sources, *more:
+        A list of :class:`AtmozFrame` / :class:`AtmozDataset`, or the same passed as separate arguments. The first is the
+        anchor. At least two.
+    names:
+        Output column names, one per source (default ``obs``, ``model``, ``src3``, ...).
+    cols:
+        The column compared in every source (default ``"value"``): one name for all, a list, or ``{name: column}``.
     max_gap:
-        Largest distance to the nearest model time (on either side) that still gives a value.
+        Largest distance to the nearest time of a discrete-time source (a model, a lidar) that still gives a value.
+    window:
+        Half-width of the time window averaged for a trajectory source (a sonde).
+    method:
+        Vertical method for profiles: ``"auto"`` (default), ``"interp"`` or ``"mean"``.
     alt:
-        Only for a surface-vs-profile comparison: the altitude (km) at which the profile side is evaluated. Default is its
-        lowest valid level at each time (in that frame's own altitude reference).
+        When surface and profile sources are mixed, the altitude (km, in the profile's own reference) at which profiles are
+        evaluated. Default: the lowest valid level at each time.
+    max_distance_km:
+        Datasets only: the farthest a frame may be from the anchor frame and still be paired with it.
     assume_same_reference:
-        Profile against profile needs both altitudes to say what they are measured from (``frame.alt_reference``: above
-        sea level or above ground). Set True to skip that check and treat the two altitudes as the same reference.
+        Skip the altitude-reference check and treat all altitudes as measured from the same level.
 
     Returns
     -------
-    AtmozFrame
-        On the observation rows: ``obs`` and ``model`` columns (plus ``alt``, ``lat``, ``lon`` from the observations),
-        UTC ``time`` index, ``units`` for ``obs`` and ``model`` (the observation unit), and ``metadata`` with the inputs' metadata.
+    AtmozFrame or AtmozDataset
+        On the anchor's rows: its ``alt``/``lat``/``lon`` axes and one column per source (anchor first), UTC ``time`` index,
+        ``units`` and ``metadata`` (the sources' metadata, the settings, ``alt_reference``). An :class:`AtmozDataset`, keyed by
+        the anchor's keys, when the anchor is a dataset.
     """
-    for name, af in (("obs", obs), ("model", model)):
-        if not isinstance(af, AtmozFrame):
-            raise TypeError(f"{name} must be an AtmozFrame, got {type(af).__name__}.")
-    for af, col in ((obs, obs_col), (model, model_col)):
-        if col not in af.df.columns:
-            raise KeyError(f"Column {col!r} is not in the frame (columns: {list(af.df.columns)}).")
-    if obs.axes["alt"] is not None and model.axes["alt"] is not None and not assume_same_reference:
-        obs, model = _common_reference(obs, model)
-    if (obs.axes["alt"] is None) != (model.axes["alt"] is None):
-        if obs.axes["alt"] is not None:
-            obs = _surface_of(obs, obs_col, alt)
-        else:
-            model = _surface_of(model, model_col, alt)
-    gap = pd.Timedelta(max_gap)
-    profiles = obs.axes["alt"] is not None
+    srcs: List[Source] = list(sources) if isinstance(sources, (list, tuple)) else [sources]
+    srcs += list(more)
+    if len(srcs) < 2:
+        raise ValueError("collocate needs at least two sources.")
+    if method not in ("auto", "interp", "mean"):
+        raise ValueError("method must be 'auto', 'interp' or 'mean'.")
+    nm = _names_for(srcs, names)
+    cl = _cols_for(cols, nm)
+    opts = dict(max_gap=max_gap, window=window, method=method, alt=alt, assume_same_reference=assume_same_reference)
+    for s, n in zip(srcs, nm):
+        if not isinstance(s, (AtmozFrame, AtmozDataset)):
+            raise TypeError(f"{n} must be an AtmozFrame or AtmozDataset, got {type(s).__name__}.")
+    if not any(isinstance(s, AtmozDataset) for s in srcs):
+        return _collocate_frames(srcs, nm, cl, **opts)
 
-    unit_obs, unit_model = obs.units.get(obs_col), model.units.get(model_col)
-    mdf = model.df
-    if unit_obs and unit_model and unit_obs != unit_model:
-        mdf = model.convert_units(model_col, unit_obs).df
-
-    obs_df = obs.df
-    result = np.full(len(obs_df), np.nan)
-    model_times = pd.DatetimeIndex(mdf.index.unique()).sort_values()
-    mt = model_times.as_unit("ns").asi8
-    groups = {t: mdf.loc[t] for t in model_times}      # one slice per model time
-
-    def column_at(t_idx: int, alts: Optional[np.ndarray], n: int) -> np.ndarray:
-        g = groups[model_times[t_idx]]
-        if not profiles:
-            vals = g[model_col].to_numpy(dtype=float) if isinstance(g, pd.DataFrame) else np.array([g[model_col]], dtype=float)
-            return np.full(n, np.nanmean(vals) if np.isfinite(vals).any() else np.nan)
-        return _profile_at(g[model.axes["alt"]].to_numpy(dtype=float), g[model_col].to_numpy(dtype=float), alts)
-
-    obs_times = obs_df.index
-    positions = pd.Series(np.arange(len(obs_df)), index=obs_times)
-    for t, pos in positions.groupby(level=0):
-        rows = pos.to_numpy()
-        alts = obs_df[obs.axes["alt"]].to_numpy(dtype=float)[rows] if profiles else None
-        k = np.searchsorted(mt, t.value)
-        if k < len(mt) and mt[k] == t.value:
-            result[rows] = column_at(k, alts, len(rows))
+    anchor = srcs[0]
+    anchor_items = list(anchor.items()) if isinstance(anchor, AtmozDataset) else [(None, anchor)]
+    frames: Dict[str, AtmozFrame] = {}
+    pairs: Dict[str, Dict[str, str]] = {}
+    unpaired: Dict[str, List[str]] = {}
+    for akey, aframe in anchor_items:
+        chosen, picked, missing = [aframe], {}, []
+        for n, s in zip(nm[1:], srcs[1:]):
+            if isinstance(s, AtmozDataset):
+                key = _nearest(aframe, s, max_distance_km)
+                if key is None:
+                    missing.append(n)
+                    continue
+                chosen.append(s[key])
+                picked[n] = key
+            else:
+                chosen.append(s)
+        if missing:
+            unpaired[str(akey)] = missing
             continue
-        if k == 0 or k == len(mt):
-            continue
-        before, after = model_times[k - 1], model_times[k]
-        if t - before > gap or after - t > gap:
-            continue
-        w = (t - before) / (after - before)
-        result[rows] = (1 - w) * column_at(k - 1, alts, len(rows)) + w * column_at(k, alts, len(rows))
-
-    cols = {}
-    for key, name in (("alt", obs.axes["alt"]), ("lat", obs.axes["lat"]), ("lon", obs.axes["lon"])):
-        if name is not None:
-            cols[key] = obs_df[name].to_numpy()
-    cols["obs"] = obs_df[obs_col].to_numpy(dtype=float)
-    cols["model"] = result
-    out = pd.DataFrame(cols, index=obs_df.index)
-    units = {"obs": unit_obs, "model": unit_obs or unit_model}
-    for key, src in (("alt", obs.axes["alt"]), ("lat", obs.axes["lat"]), ("lon", obs.axes["lon"])):
-        if src is not None and src in obs.units:
-            units[key] = obs.units[src]
-    ref = obs.alt_reference if profiles else None
-    return AtmozFrame(out, units={k: v for k, v in units.items() if v}, metadata={
-        **({"alt_reference": ref} if ref else {}),
-        "obs": dict(obs.metadata), "model": dict(model.metadata), "max_gap": str(gap),
-        "obs_col": obs_col, "model_col": model_col},
-        **{k: k for k in ("lat", "lon", "alt") if k in cols})
+        used = [nm[0]] + [n for n in nm[1:] if n not in missing]
+        frames[str(akey)] = _collocate_frames(chosen, used, [cl[nm.index(n)] for n in used], **opts)
+        pairs[str(akey)] = picked
+    if not isinstance(anchor, AtmozDataset):
+        if not frames:
+            raise ValueError(f"No frame within {max_distance_km} km of the anchor for: {unpaired.get('None')}.")
+        return frames["None"]
+    meta = {"names": nm, "pairs": pairs, "unpaired": unpaired, "max_distance_km": max_distance_km,
+            "sources": [getattr(s, "source", None) for s in srcs]}
+    return AtmozDataset(name="collocated", source="atmoz.collocate", frames=frames, metadata=meta)
