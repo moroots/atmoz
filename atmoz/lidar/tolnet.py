@@ -314,7 +314,8 @@ class TOLNET:
     def _parse_one(path: PathLike) -> Tuple[dict, pd.DataFrame]:
         """One TOLNet JSON file -> (its metadata, a long DataFrame: UTC time index, ``alt`` km, ``value`` and extras).
 
-        Times are ISO strings read as UTC (naive ones are taken to be UTC); altitudes are in km and the values in ppbv.
+        Times are ISO strings read as UTC (naive ones are taken to be UTC). Altitude is converted to km from the unit the
+        file declares (``m`` or ``km``; undeclared is taken as km, with a warning). Value units are read from the file.
         Other 2-D variables of the file with the same shape as ``value`` (uncertainties, say) become extra columns.
         One row per time-altitude point; non-numeric values are NaN.
         """
@@ -322,6 +323,13 @@ class TOLNET:
             meta = json.load(fh)
         time = pd.to_datetime(meta["datetime"]["data"], utc=True)
         alt = pd.to_numeric(pd.Series(meta["altitude"]["data"]), errors="coerce").to_numpy(dtype=float)
+        alt_unit = str(meta["altitude"].get("units") or "").strip().lower()
+        if alt_unit in ("m", "meter", "meters", "metre", "metres"):
+            alt = alt / 1000.0
+        elif alt_unit not in ("km", "kilometer", "kilometers", "kilometre", "kilometres"):
+            if alt_unit:
+                raise ValueError(f"{path}: unsupported altitude unit {alt_unit!r} (expected m or km).")
+            warnings.warn(f"{path}: the file does not declare altitude units; assuming km.", UserWarning, stacklevel=2)
 
         def grid(entry) -> Optional[np.ndarray]:
             if not isinstance(entry, dict):
@@ -355,7 +363,9 @@ class TOLNET:
             info[name] = meta
             row = by_name.loc[name] if name in by_name.index else None
             lat, lon = meta["LATITUDE.INSTRUMENT"], meta["LONGITUDE.INSTRUMENT"]
-            units = {"alt": "km", "value": str(meta["value"].get("units") or "ppb"), "lat": "deg", "lon": "deg"}
+            units = {"alt": "km", "lat": "deg", "lon": "deg"}
+            if isinstance(meta["value"].get("units"), str):
+                units["value"] = meta["value"]["units"]
             for col in df.columns.difference(["alt", "value"]):
                 if isinstance(meta[col].get("units"), str):
                     units[col] = meta[col]["units"]

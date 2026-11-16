@@ -32,7 +32,7 @@ def payload(day):
     return {"LATITUDE.INSTRUMENT": 39.24, "LONGITUDE.INSTRUMENT": -76.363,
             "fileInfo": {"start_data_date": f"{day} 00:00:00", "instrument_group_name": "NASA JPL SMOL-2",
                          "processing_type_name": "Centrally Processed"},
-            "altitude": {"data": ALT},
+            "altitude": {"data": ALT, "units": "km"},
             "datetime": {"data": [f"{day}T00:00:00Z", f"{day}T01:00:00Z"]},
             "value": {"data": [[10.0, 20.0, 30.0], [11.0, "bad", 31.0]], "units": "ppbv"},
             "uncertainty": {"data": [[1.0, 2.0, 3.0], [1.5, 2.5, 3.5]], "units": "ppbv"}}
@@ -138,3 +138,22 @@ def test_plot_curtain_and_plot_curtains(fake_http):
     figs = TOLNET.plot_curtains(ds)
     assert len(figs) == 1
     plt.close("all")
+
+
+def test_altitude_in_metres_is_converted_and_missing_units_warn(tmp_path):
+    import json
+    import pytest
+    from atmoz.lidar.tolnet import TOLNET
+    p = payload("2025-07-28")
+    p["altitude"] = {"data": [500, 1000, 1500], "units": "m"}
+    f = tmp_path / "m.json"
+    f.write_text(json.dumps(p))
+    assert list(TOLNET._parse_one(f)[1]["alt"].iloc[:3]) == [0.5, 1.0, 1.5]
+    p["altitude"] = {"data": ALT}
+    f.write_text(json.dumps(p))
+    with pytest.warns(UserWarning, match="altitude units"):
+        TOLNET._parse_one(f)
+    p["altitude"] = {"data": ALT, "units": "ft"}
+    f.write_text(json.dumps(p))
+    with pytest.raises(ValueError, match="unsupported altitude unit"):
+        TOLNET._parse_one(f)
