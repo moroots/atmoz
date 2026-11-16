@@ -29,7 +29,6 @@ import shutil
 import tempfile
 import threading
 import time
-import warnings
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -97,9 +96,7 @@ def _jsonable(obj: Any) -> Any:
 
 def _frame(df: pd.DataFrame, units: Dict[str, str], metadata: Dict[str, Any], **axes) -> AtmozFrame:
     """An AtmozFrame with ``alt`` as its altitude column; source units such as ``km^-1.sr^-1`` are kept as given."""
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message=".*not a recognised unit")
-        return AtmozFrame(df, units=units, alt="alt", metadata=metadata, **axes)
+    return AtmozFrame(df, units=units, alt="alt", metadata=metadata, **axes)
 
 
 class UCN:

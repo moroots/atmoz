@@ -36,6 +36,7 @@ _KNOWN_UNITS: frozenset = frozenset({
     "kg/m3", "g/m3", "mg/m3", "µg/m3", "molecules/cm3",
     "mol/mol", "ppm", "ppb", "ppt",
     "m/s", "km/h", "kn",
+    "km^-1.sr^-1", "1/(km sr)",
     "deg", "rad",
     "W/m2", "W/m²", "J/m2", "J/m²",
 })
