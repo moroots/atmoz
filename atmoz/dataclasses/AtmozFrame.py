@@ -124,6 +124,15 @@ class AtmozFrame:
         return None if pd.isna(lat) or pd.isna(lon) else (float(lat), float(lon))
 
     @property
+    def alt_reference(self) -> Optional[str]:
+        """What ``alt`` is measured from: ``"asl"`` (above sea level), ``"agl"`` (above ground) or None (not stated).
+
+        Stored in ``metadata["alt_reference"]``; ``metadata["site_elevation_km"]`` is the ground elevation of the site
+        (above sea level), which converts between the two.
+        """
+        return self.metadata.get("alt_reference")
+
+    @property
     def axes(self) -> Dict[str, Optional[str]]:
         """Column names of the axes (``t`` is always the index)."""
         return {"t": "index", "lat": self._lat, "lon": self._lon, "alt": self._alt}
@@ -206,6 +215,32 @@ class AtmozFrame:
         """A new frame with *updates* merged into the metadata."""
         return AtmozFrame(self.df, units=self.units, lat=self._lat, lon=self._lon, alt=self._alt,
                           metadata={**self.metadata, **updates})
+
+    def with_alt_reference(self, target: str) -> "AtmozFrame":
+        """The frame with ``alt`` re-expressed above sea level (``"asl"``) or above ground (``"agl"``).
+
+        Needs ``metadata["alt_reference"]`` and, to change reference, ``metadata["site_elevation_km"]`` (``alt`` in km).
+        """
+        if target not in ("asl", "agl"):
+            raise ValueError("target must be 'asl' or 'agl'.")
+        if self._alt is None:
+            raise ValueError("This frame has no altitude axis.")
+        current = self.alt_reference
+        if current not in ("asl", "agl"):
+            raise ValueError("The altitude reference of this frame is not stated: set metadata['alt_reference'] "
+                             "to 'asl' or 'agl' (frame.with_metadata(alt_reference=...)).")
+        if current == target:
+            return self
+        elevation = self.metadata.get("site_elevation_km")
+        if elevation is None or pd.isna(elevation):
+            raise ValueError(f"Converting {current} -> {target} needs metadata['site_elevation_km'] (the site's ground "
+                             "elevation above sea level, km).")
+        if self.units.get("alt", "km") != "km":
+            raise ValueError("Altitude reference conversion needs alt in km.")
+        df = self.df.copy()
+        df[self._alt] = df[self._alt] - float(elevation) if target == "agl" else df[self._alt] + float(elevation)
+        return AtmozFrame(df, units=self.units, lat=self._lat, lon=self._lon, alt=self._alt,
+                          metadata={**self.metadata, "alt_reference": target})
 
     def unit(self, col: str) -> Optional[str]:
         return self.units.get(col)

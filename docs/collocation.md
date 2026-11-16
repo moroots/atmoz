@@ -46,5 +46,8 @@ What `collocate` does:
 * **Units.** The model column is converted to the observation unit when both are declared and differ (for example ppm to ppb).
 * **Kinds.** Profile against profile is level by level; surface against surface in time only. Surface against profile is allowed too: the profile side is reduced to its lowest valid level at each time, or to `alt=` (km), and the result is a surface-style frame on the surface frame's times (`metadata["obs"|"model"]["reduced_to_surface"]` says which side was reduced).
 
-Check that both altitudes use the same reference before reading the difference: GEOS-CF's `alt` is the layer height above the surface, and the lidar
-altitude is whatever the TOLNet file reports (it may be above sea level).
+* **Altitude reference.** Profile altitudes say what they are measured from (`frame.alt_reference`, `"asl"` or `"agl"`; the ground elevation is
+  `frame.metadata["site_elevation_km"]`). TOLNet files report altitude above sea level and carry the instrument elevation; GEOS-CF layer heights
+  are above the surface. When the two differ `collocate` converts the sea-level side to above ground (`frame.with_alt_reference("agl")`) and the
+  result is in agl. If a reference or elevation is missing it raises instead of guessing; pass `assume_same_reference=True` to override. The
+  model's terrain height at the grid cell is not subtracted, so over hilly terrain the two ground levels can differ by the terrain difference.

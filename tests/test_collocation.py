@@ -6,11 +6,12 @@ import atmoz
 from atmoz import AtmozFrame
 
 
-def profile_frame(times, alts, f, unit="ppb", lat=39.0, lon=-76.0):
+def profile_frame(times, alts, f, unit="ppb", lat=39.0, lon=-76.0, ref="agl", elevation=None):
     rows = [(t, a, f(t, a)) for t in pd.DatetimeIndex(times) for a in alts]
     df = pd.DataFrame(rows, columns=["time", "alt", "value"]).set_index("time")
     df["lat"], df["lon"] = lat, lon
-    return AtmozFrame(df, units={"value": unit, "alt": "km"}, lat="lat", lon="lon", alt="alt")
+    meta = {"alt_reference": ref, **({"site_elevation_km": elevation} if elevation is not None else {})}
+    return AtmozFrame(df, units={"value": unit, "alt": "km"}, lat="lat", lon="lon", alt="alt", metadata=meta)
 
 
 def test_profile_interpolated_in_time_and_altitude():
@@ -27,7 +28,7 @@ def test_model_altitudes_may_differ_per_time():
     t0, t1 = pd.Timestamp("2024-07-01 00:00", tz="UTC"), pd.Timestamp("2024-07-01 01:00", tz="UTC")
     a = profile_frame([t0], [0.0, 2.0], lambda t, z: z)          # value = alt
     b = profile_frame([t1], [0.0, 4.0], lambda t, z: z)          # value = alt, on a different grid
-    model = AtmozFrame(pd.concat([a.df, b.df]), units=a.units, lat="lat", lon="lon", alt="alt")
+    model = AtmozFrame(pd.concat([a.df, b.df]), units=a.units, lat="lat", lon="lon", alt="alt", metadata=a.metadata)
     obs = profile_frame(pd.DatetimeIndex([t0 + pd.Timedelta("30min")]), [1.0], lambda t, z: 0.0)
     assert np.allclose(atmoz.collocate(obs, model).df["model"], [1.0])
 
@@ -92,3 +93,43 @@ def test_profile_obs_with_surface_model_is_reduced_to_the_obs_surface():
     out = atmoz.collocate(obs, model)
     assert np.allclose(out.df["obs"], [20.0, 20.0]) and np.allclose(out.df["model"], [1.0, 3.0])
     assert out.metadata["obs"]["reduced_to_surface"] == "lowest level"
+
+
+def test_asl_lidar_is_converted_to_agl_before_comparing():
+    t = pd.DatetimeIndex(["2024-07-01 00:00"], tz="UTC")
+    model = profile_frame(t, [0.0, 1.0, 2.0], lambda tt, a: 10 * a, ref="agl")                 # value = 10 * height above ground
+    obs = profile_frame(t, [0.5, 1.5, 2.5], lambda tt, a: 0.0, ref="asl", elevation=0.5)      # ASL 0.5/1.5/2.5 = AGL 0/1/2
+    out = atmoz.collocate(obs, model)
+    assert np.allclose(out.df["alt"], [0.0, 1.0, 2.0]) and np.allclose(out.df["model"], [0.0, 10.0, 20.0])
+    assert out.alt_reference == "agl"
+
+
+def test_same_reference_needs_no_elevation_and_keeps_it():
+    t = pd.DatetimeIndex(["2024-07-01 00:00"], tz="UTC")
+    model = profile_frame(t, [0.0, 1.0], lambda tt, a: a, ref="asl")
+    obs = profile_frame(t, [0.5], lambda tt, a: 0.0, ref="asl")
+    out = atmoz.collocate(obs, model)
+    assert np.allclose(out.df["model"], [0.5]) and out.alt_reference == "asl"
+
+
+def test_unknown_reference_or_elevation_raises_unless_assumed():
+    t = pd.DatetimeIndex(["2024-07-01 00:00"], tz="UTC")
+    model = profile_frame(t, [0.0, 1.0], lambda tt, a: a, ref=None)
+    obs = profile_frame(t, [0.5], lambda tt, a: 0.0, ref="asl", elevation=0.1)
+    with pytest.raises(ValueError, match="not stated"):
+        atmoz.collocate(obs, model)
+    assert np.allclose(atmoz.collocate(obs, model, assume_same_reference=True).df["model"], [0.5])
+    no_elev = profile_frame(t, [0.5], lambda tt, a: 0.0, ref="asl")
+    agl_model = profile_frame(t, [0.0, 1.0], lambda tt, a: a, ref="agl")
+    with pytest.raises(ValueError, match="site_elevation_km"):
+        atmoz.collocate(no_elev, agl_model)
+
+
+def test_with_alt_reference_round_trip():
+    t = pd.DatetimeIndex(["2024-07-01 00:00"], tz="UTC")
+    f = profile_frame(t, [1.0, 2.0], lambda tt, a: a, ref="asl", elevation=0.25)
+    agl = f.with_alt_reference("agl")
+    assert np.allclose(agl.df["alt"], [0.75, 1.75]) and agl.alt_reference == "agl"
+    assert np.allclose(agl.with_alt_reference("asl").df["alt"], [1.0, 2.0])
+    with pytest.raises(ValueError):
+        f.with_alt_reference("msl")

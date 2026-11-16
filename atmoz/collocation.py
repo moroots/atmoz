@@ -5,6 +5,10 @@
 
 * **time**: for every observation time the model is interpolated linearly between its two nearest times; observations farther
   than *max_gap* from either neighbour get NaN.
+* **altitude reference**: profile altitudes must say what they are measured from (``frame.alt_reference``, "asl" above sea
+  level or "agl" above ground; TOLNet is asl with the instrument elevation in the metadata, GEOS-CF is agl). When the
+  two differ, the asl side is converted to above ground with its ``site_elevation_km``; the result is then in agl. Missing
+  information raises an error instead of guessing.
 * **altitude** (profiles): each model profile is interpolated onto the observation altitudes using the model's own ``alt``
   column (which may differ per time, as GEOS-CF layer heights do). Outside the model's altitude range the result is NaN.
 * **units**: the model column is converted to the observation unit when both are declared and differ.
@@ -54,6 +58,19 @@ def _surface_of(af: AtmozFrame, col: str, alt: Optional[float]) -> AtmozFrame:
                       metadata={**af.metadata, "reduced_to_surface": "lowest level" if alt is None else f"{alt} km"})
 
 
+def _common_reference(obs: AtmozFrame, model: AtmozFrame):
+    """Express both profiles' altitudes in the same reference (above ground when they differ), or explain what is missing."""
+    ro, rm = obs.alt_reference, model.alt_reference
+    if ro is None or rm is None:
+        missing = " and ".join(n for n, r in (("obs", ro), ("model", rm)) if r is None)
+        raise ValueError(f"The altitude reference of {missing} is not stated, so the profiles cannot be aligned safely. "
+                         "Set it with frame.with_metadata(alt_reference='asl' or 'agl', site_elevation_km=...), or pass "
+                         "assume_same_reference=True if you know both are measured from the same level.")
+    if ro == rm:
+        return obs, model
+    return obs.with_alt_reference("agl"), model.with_alt_reference("agl")
+
+
 def collocate(
     obs: AtmozFrame,
     model: AtmozFrame,
@@ -62,6 +79,7 @@ def collocate(
     model_col: str = "value",
     max_gap: Union[str, pd.Timedelta] = "1h",
     alt: Optional[float] = None,
+    assume_same_reference: bool = False,
 ) -> AtmozFrame:
     """Interpolate *model* onto the times (and altitudes) of *obs*.
 
@@ -76,7 +94,10 @@ def collocate(
         Largest distance to the nearest model time (on either side) that still gives a value.
     alt:
         Only for a surface-vs-profile comparison: the altitude (km) at which the profile side is evaluated. Default is its
-        lowest valid level at each time.
+        lowest valid level at each time (in that frame's own altitude reference).
+    assume_same_reference:
+        Profile against profile needs both altitudes to say what they are measured from (``frame.alt_reference``: above
+        sea level or above ground). Set True to skip that check and treat the two altitudes as the same reference.
 
     Returns
     -------
@@ -90,6 +111,8 @@ def collocate(
     for af, col in ((obs, obs_col), (model, model_col)):
         if col not in af.df.columns:
             raise KeyError(f"Column {col!r} is not in the frame (columns: {list(af.df.columns)}).")
+    if obs.axes["alt"] is not None and model.axes["alt"] is not None and not assume_same_reference:
+        obs, model = _common_reference(obs, model)
     if (obs.axes["alt"] is None) != (model.axes["alt"] is None):
         if obs.axes["alt"] is not None:
             obs = _surface_of(obs, obs_col, alt)
@@ -144,7 +167,9 @@ def collocate(
     for key, src in (("alt", obs.axes["alt"]), ("lat", obs.axes["lat"]), ("lon", obs.axes["lon"])):
         if src is not None and src in obs.units:
             units[key] = obs.units[src]
+    ref = obs.alt_reference if profiles else None
     return AtmozFrame(out, units={k: v for k, v in units.items() if v}, metadata={
+        **({"alt_reference": ref} if ref else {}),
         "obs": dict(obs.metadata), "model": dict(model.metadata), "max_gap": str(gap),
         "obs_col": obs_col, "model_col": model_col},
         **{k: k for k in ("lat", "lon", "alt") if k in cols})

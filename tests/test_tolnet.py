@@ -158,3 +158,16 @@ def test_altitude_in_metres_is_converted_and_missing_units_warn(tmp_path):
     f.write_text(json.dumps(p))
     with pytest.raises(ValueError, match="unsupported altitude unit"):
         TOLNET._parse_one(f)
+
+
+def test_real_file_layout_units_and_altitude_reference(tmp_path):
+    import json
+    p = payload("2025-07-28")
+    p["altitude"] = {"attributes": {"VAR_DESCRIPTION": "Altitude above sea level (km)", "VAR_UNITS": "km"}, "data": ALT}
+    p["value"] = {"attributes": {"VAR_UNITS": "ppbv"}, "data": p["value"]["data"]}
+    p["fileInfo"]["instrument_altitude"] = 90
+    f = tmp_path / "1.json"
+    f.write_text(json.dumps(p))
+    meta, df = TOLNET._parse_one(f)
+    assert TOLNET._unit_of(meta["value"]) == "ppbv" and TOLNET._alt_reference(meta) == "asl"
+    assert TOLNET._unit_of({"units": "km"}) == "km" and TOLNET._unit_of({}) is None

@@ -294,7 +294,8 @@ class GEOS_CF:
             frame_units = {"value": unit_of[v], **({"alt": "km"} if leveled else {})}
             frames[v] = AtmozFrame(df, units={c: u for c, u in frame_units.items() if u}, lat="lat", lon="lon",
                                    alt="alt" if leveled else None,
-                                   metadata={"variable": v, "collection": q.collection, "mode": q.mode, **cell})
+                                   metadata={"variable": v, "collection": q.collection, "mode": q.mode, **cell,
+                                             **({"alt_reference": "agl"} if leveled else {})})
         meta = {"endpoint": "geos_cf", "collection": q.collection, "mode": q.mode, "variables": list(q.variables),
                 "lat_requested": q.lat, "lon_requested": q.lon, **cell, "start": q.start_date, "end": q.end_date,
                 "units": {v: u for v, u in unit_of.items() if u}, "files": files,

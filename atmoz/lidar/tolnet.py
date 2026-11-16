@@ -311,11 +311,26 @@ class TOLNET:
                                  max_age=timedelta(hours=1) if job["nrt"] else None, refresh=refresh)
 
     @staticmethod
+    def _unit_of(entry) -> Optional[str]:
+        """The unit a TOLNet variable declares: ``attributes.VAR_UNITS`` in real files, else a plain ``units`` key."""
+        if not isinstance(entry, dict):
+            return None
+        unit = (entry.get("attributes") or {}).get("VAR_UNITS") or entry.get("units")
+        return unit if isinstance(unit, str) else None
+
+    @staticmethod
+    def _alt_reference(meta: dict) -> Optional[str]:
+        """``"asl"`` / ``"agl"`` from the altitude variable's description (real files say 'above sea level'), else None."""
+        text = str((meta["altitude"].get("attributes") or {}).get("VAR_DESCRIPTION", "")).lower()
+        return "asl" if "sea level" in text else "agl" if "ground" in text or "above surface" in text else None
+
+    @staticmethod
     def _parse_one(path: PathLike) -> Tuple[dict, pd.DataFrame]:
         """One TOLNet JSON file -> (its metadata, a long DataFrame: UTC time index, ``alt`` km, ``value`` and extras).
 
         Times are ISO strings read as UTC (naive ones are taken to be UTC). Altitude is converted to km from the unit the
-        file declares (``m`` or ``km``; undeclared is taken as km, with a warning). Value units are read from the file.
+        file declares (``m`` or ``km``; undeclared is taken as km, with a warning). Units are read from each variable's
+        ``attributes.VAR_UNITS``.
         Other 2-D variables of the file with the same shape as ``value`` (uncertainties, say) become extra columns.
         One row per time-altitude point; non-numeric values are NaN.
         """
@@ -323,7 +338,7 @@ class TOLNET:
             meta = json.load(fh)
         time = pd.to_datetime(meta["datetime"]["data"], utc=True)
         alt = pd.to_numeric(pd.Series(meta["altitude"]["data"]), errors="coerce").to_numpy(dtype=float)
-        alt_unit = str(meta["altitude"].get("units") or "").strip().lower()
+        alt_unit = str(TOLNET._unit_of(meta["altitude"]) or "").strip().lower()
         if alt_unit in ("m", "meter", "meters", "metre", "metres"):
             alt = alt / 1000.0
         elif alt_unit not in ("km", "kilometer", "kilometers", "kilometre", "kilometres"):
@@ -364,11 +379,12 @@ class TOLNET:
             row = by_name.loc[name] if name in by_name.index else None
             lat, lon = meta["LATITUDE.INSTRUMENT"], meta["LONGITUDE.INSTRUMENT"]
             units = {"alt": "km", "lat": "deg", "lon": "deg"}
-            if isinstance(meta["value"].get("units"), str):
-                units["value"] = meta["value"]["units"]
+            if TOLNET._unit_of(meta["value"]):
+                units["value"] = TOLNET._unit_of(meta["value"])
             for col in df.columns.difference(["alt", "value"]):
-                if isinstance(meta[col].get("units"), str):
-                    units[col] = meta[col]["units"]
+                if TOLNET._unit_of(meta[col]):
+                    units[col] = TOLNET._unit_of(meta[col])
+            elevation = meta["fileInfo"].get("instrument_altitude")
             frames[name] = AtmozFrame(
                 df.assign(lat=float(lat), lon=float(lon)), units=units, lat="lat", lon="lon", alt="alt",
                 metadata={
@@ -378,6 +394,8 @@ class TOLNET:
                     "file": name, "file_id": None if row is None else int(row["id"]),
                     "near_real_time": None if row is None else str(row["near_real_time"]).lower() == "true",
                     "latitude": lat, "longitude": lon, "start_data_date": meta["fileInfo"]["start_data_date"],
+                    "alt_reference": TOLNET._alt_reference(meta),
+                    "site_elevation_km": None if elevation is None else float(elevation) / 1000.0,
                     "fileInfo": meta["fileInfo"],
                 })
         groups: Dict[str, List[str]] = {}
