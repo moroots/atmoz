@@ -18,8 +18,8 @@ except PackageNotFoundError:  # running from a source tree that is not installed
 # public name -> (module, attribute)
 _LAZY = {
     "AirNow": ("atmoz.surface.AirNow", "AirNow"),
-    "AtmoFrame": ("atmoz.dataclasses.AtmoFrame", "AtmoFrame"),
-    "AtmoDataset": ("atmoz.dataclasses.AtmoDataset", "AtmoDataset"),
+    "AtmozFrame": ("atmoz.dataclasses.AtmozFrame", "AtmozFrame"),
+    "AtmozDataset": ("atmoz.dataclasses.AtmozDataset", "AtmozDataset"),
     "set_secret": ("atmoz.resources.credentials", "set_secret"),
     "get_secret": ("atmoz.resources.credentials", "get_secret"),
     "delete_secret": ("atmoz.resources.credentials", "delete_secret"),
