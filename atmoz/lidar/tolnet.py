@@ -6,7 +6,7 @@ One module for everything TOLNet:
 * lazy HDF reading of fetched GEOMS files (:meth:`TOLNET.open_hdf`),
 * time-altitude curtain plots (:meth:`TOLNET.plot_curtain`, which uses :func:`atmoz.plotting.curtain`).
 
-Follows the package conventions (``docs/conventions.md``): ``download()`` returns an ``atmoz_dataset``,
+Follows the package conventions (``docs/conventions.md``): ``download()`` returns an ``AtmozDataset``,
 ``fetch()`` returns ``{name: Path}``, downloads are cached and all-or-nothing.
 """
 
@@ -20,13 +20,14 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
+import numpy as np
 import pandas as pd
 import requests
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from atmoz.dataclasses import AtmozDataset, AtmozFrame
 from atmoz.exceptions import NoDataError
-from atmoz.resources.atmoz_dataclasses import atmoz_dataset
 from atmoz.resources.cache import cache_dir as _cache_root
 from atmoz.resources.cache import download_to_cache
 from atmoz.resources.sessionHandler import SessionHandler
@@ -167,11 +168,12 @@ class TOLNET:
     """Client for the TOLNet REST API (https://tolnet.larc.nasa.gov/api).
 
     >>> ds = TOLNET.download("2025-07-28", "2025-08-01", product_type=[4], processing_type=[1])
-    >>> groups = TOLNET.group(ds)                  # {(instrument, processing, "latxlon"): {date: DataFrame}}
+    >>> groups = TOLNET.group(ds)                  # {(instrument, processing, "latxlon"): {date: AtmozFrame}}
     >>> TOLNET.plot_curtain(groups[next(iter(groups))])
 
-    * :meth:`download` -> :class:`~atmoz.atmoz_dataset` (``.data == {file_name: DataFrame}``; ``.metadata`` has the
-      per-file TOLNet metadata, the file list and the instrument groups). JSON needs no login.
+    * :meth:`download` -> :class:`~atmoz.AtmozDataset` (``ds[file_name]`` is a long-format
+      :class:`~atmoz.AtmozFrame`; ``ds.metadata`` has the per-file TOLNet metadata, the file list and the instrument
+      groups). JSON needs no login.
     * :meth:`fetch`    -> ``{file_name: path}`` (raw ``json`` or ``hdf`` files; HDF needs NASA EarthData credentials).
 
     The catalogue helpers (:attr:`products`, :attr:`file_types`, :attr:`instrument_groups`, :attr:`processing_types`,
@@ -310,12 +312,32 @@ class TOLNET:
 
     @staticmethod
     def _parse_one(path: PathLike) -> Tuple[dict, pd.DataFrame]:
-        """One TOLNet JSON file -> (its metadata, a DataFrame indexed by UTC time with altitude columns)."""
+        """One TOLNet JSON file -> (its metadata, a long DataFrame: UTC time index, ``alt`` km, ``value`` and extras).
+
+        Times are ISO strings read as UTC (naive ones are taken to be UTC); altitudes are in km and the values in ppbv.
+        Other 2-D variables of the file with the same shape as ``value`` (uncertainties, say) become extra columns.
+        One row per time-altitude point; non-numeric values are NaN.
+        """
         with open(path, "r", encoding="utf-8") as fh:
             meta = json.load(fh)
-        df = pd.DataFrame(meta["value"]["data"], columns=meta["altitude"]["data"],
-                          index=pd.to_datetime(meta["datetime"]["data"], utc=True))
-        return meta, df.apply(pd.to_numeric, errors="coerce").sort_index()
+        time = pd.to_datetime(meta["datetime"]["data"], utc=True)
+        alt = pd.to_numeric(pd.Series(meta["altitude"]["data"]), errors="coerce").to_numpy(dtype=float)
+
+        def grid(entry) -> Optional[np.ndarray]:
+            if not isinstance(entry, dict):
+                return None
+            arr = pd.DataFrame(entry.get("data")).apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+            return arr if arr.shape == (len(time), len(alt)) else None
+
+        columns = {"value": grid(meta["value"])}
+        for key, entry in meta.items():
+            if key not in ("value", "altitude", "datetime") and (arr := grid(entry)) is not None:
+                columns[key] = arr
+        order = np.argsort(time.to_numpy(), kind="stable")
+        df = pd.DataFrame({"alt": np.tile(alt, len(time)),
+                           **{k: v[order].ravel() for k, v in columns.items()}},
+                          index=pd.DatetimeIndex(np.repeat(time[order], len(alt)), name="time"))
+        return meta, df
 
     def _load_one(self, job: dict, **kw) -> Tuple[dict, pd.DataFrame]:
         return self._parse_one(self._fetch_one(job, **kw))
@@ -326,15 +348,34 @@ class TOLNET:
         return (info["instrument_group_name"], info["processing_type_name"],
                 f"{meta['LATITUDE.INSTRUMENT']}x{meta['LONGITUDE.INSTRUMENT']}")
 
-    def _assemble(self, loaded: Dict[str, Tuple[dict, pd.DataFrame]], files: pd.DataFrame) -> atmoz_dataset:
-        data = {name: df for name, (_, df) in loaded.items()}
-        info = {name: meta for name, (meta, _) in loaded.items()}
+    def _assemble(self, loaded: Dict[str, Tuple[dict, pd.DataFrame]], files: pd.DataFrame) -> AtmozDataset:
+        by_name = files.drop_duplicates("file_name").set_index("file_name")
+        frames, info = {}, {}
+        for name, (meta, df) in loaded.items():
+            info[name] = meta
+            row = by_name.loc[name] if name in by_name.index else None
+            lat, lon = meta["LATITUDE.INSTRUMENT"], meta["LONGITUDE.INSTRUMENT"]
+            units = {"alt": "km", "value": str(meta["value"].get("units") or "ppb"), "lat": "deg", "lon": "deg"}
+            for col in df.columns.difference(["alt", "value"]):
+                if isinstance(meta[col].get("units"), str):
+                    units[col] = meta[col]["units"]
+            frames[name] = AtmozFrame(
+                df.assign(lat=float(lat), lon=float(lon)), units=units, lat="lat", lon="lon", alt="alt",
+                metadata={
+                    "instrument": meta["fileInfo"]["instrument_group_name"],
+                    "processing": meta["fileInfo"]["processing_type_name"],
+                    "product": None if row is None else row["product_type_name"],
+                    "file": name, "file_id": None if row is None else int(row["id"]),
+                    "near_real_time": None if row is None else str(row["near_real_time"]).lower() == "true",
+                    "latitude": lat, "longitude": lon, "start_data_date": meta["fileInfo"]["start_data_date"],
+                    "fileInfo": meta["fileInfo"],
+                })
         groups: Dict[str, List[str]] = {}
         for name, meta in info.items():
             groups.setdefault("|".join(self._group_key(meta)), []).append(name)
-        metadata = {"endpoint": "tolnet", "files": list(data), "rows": {n: len(d) for n, d in data.items()},
+        metadata = {"endpoint": "tolnet", "files": list(frames), "rows": {n: len(f) for n, f in frames.items()},
                     "info": info, "groups": groups, "file_list": files}
-        return atmoz_dataset(data=data, metadata=metadata, datatype="lidar")
+        return AtmozDataset(name="TOLNet", source="TOLNet", frames=frames, metadata=metadata)
 
     # ---- public --------------------------------------------------------------------------------------------
     @classmethod
@@ -349,7 +390,7 @@ class TOLNET:
                  silent: bool = False,
                  show_traceback: bool = False,
                  session_handler: Optional[SessionHandler] = None,
-                 **query) -> atmoz_dataset:
+                 **query) -> AtmozDataset:
         """Download (once, then cached) and parse every matching TOLNet JSON file.
 
         Parameters
@@ -364,9 +405,11 @@ class TOLNET:
 
         Returns
         -------
-        atmoz_dataset
-            ``datatype="lidar"``; ``.data == {file_name: DataFrame}`` (UTC time index, altitude columns).
-            ``.metadata``: ``info`` (TOLNet's metadata per file), ``groups`` (``"instrument|processing|latxlon"`` ->
+        AtmozDataset
+            ``ds[file_name]`` is an :class:`~atmoz.AtmozFrame` in long format: index ``time`` (UTC), columns ``alt``
+            (km), ``value`` (ozone, ppb), any extra per-point variables of the file, and constant ``lat``/``lon``.
+            ``units`` and per-file ``metadata`` (instrument, processing, product, file_id, ...) sit on the frame.
+            ``ds.metadata``: ``info`` (TOLNet's metadata per file), ``groups`` (``"instrument|processing|latxlon"`` ->
             file names), ``file_list``. Use :meth:`group` to get frames per instrument and day.
 
         Raises
@@ -416,13 +459,13 @@ class TOLNET:
 
     # ---- helpers on results -----------------------------------------------------------------------------------
     @staticmethod
-    def group(ds: atmoz_dataset) -> Dict[GroupKey, Dict[str, pd.DataFrame]]:
-        """``{(instrument, processing, "latxlon"): {"YYYY-MM-DD": DataFrame}}``: the shape the curtain plot takes."""
-        out: Dict[GroupKey, Dict[str, pd.DataFrame]] = {}
-        for name, meta in ds.metadata["info"].items():
-            key = TOLNET._group_key(meta)
-            day = meta["fileInfo"]["start_data_date"].split(" ")[0]
-            out.setdefault(key, {})[day] = ds.data[name]
+    def group(ds: AtmozDataset) -> Dict[GroupKey, Dict[str, AtmozFrame]]:
+        """``{(instrument, processing, "latxlon"): {"YYYY-MM-DD": AtmozFrame}}``: the shape the curtain plot takes."""
+        out: Dict[GroupKey, Dict[str, AtmozFrame]] = {}
+        for name, frame in ds.items():
+            meta = frame.metadata
+            key = (meta["instrument"], meta["processing"], f"{meta['latitude']}x{meta['longitude']}")
+            out.setdefault(key, {})[meta["start_data_date"].split(" ")[0]] = frame
         return {k: dict(sorted(v.items())) for k, v in out.items()}
 
     @staticmethod
@@ -433,23 +476,39 @@ class TOLNET:
 
     # ---- plotting (one implementation: atmoz.plotting.curtain) --------------------------------------------------
     @staticmethod
-    def plot_curtain(data, **kwargs):
-        """Ozone curtain of one DataFrame or a ``{date: DataFrame}`` dict. Returns ``(fig, ax)``.
+    def _curtain_input(data):
+        """A long ``AtmozFrame`` (or a dict of them) -> the time x altitude DataFrame(s) ``curtain`` plots."""
+        if isinstance(data, AtmozFrame):
+            df = data.df
+            alt = df[data.axes["alt"]].to_numpy()
+            tmp = pd.DataFrame({"t": df.index, "alt": alt, "value": df["value"].to_numpy()})
+            wide = tmp.pivot(index="t", columns="alt", values="value")
+            wide.index.name = None
+            wide.columns.name = None
+            return wide
+        if isinstance(data, dict):
+            return {k: TOLNET._curtain_input(v) for k, v in data.items()}
+        return data
 
-        Same as ``atmoz.plot.curtain``; adds the TOLNet watermark unless you pass ``watermark=None``/a path.
+    @staticmethod
+    def plot_curtain(data, **kwargs):
+        """Ozone curtain of one frame or a ``{date: frame}`` dict. Returns ``(fig, ax)``.
+
+        *data* is a long :class:`~atmoz.AtmozFrame` (pivoted to time x altitude here) or a wide DataFrame (time index,
+        altitude columns), or a dict of them. Same as ``atmoz.plot.curtain``; adds the TOLNet watermark unless you pass ``watermark=None``/a path.
         Pass ``show=True`` to call ``plt.show()`` (scripts).
         """
         from atmoz.plotting.curtain import curtain
         show = kwargs.pop("show", False)
         kwargs.setdefault("watermark", get_asset("Watermark_TOLNet.png"))
-        fig, ax = curtain(data, **kwargs)
+        fig, ax = curtain(TOLNET._curtain_input(data), **kwargs)
         if show:
             import matplotlib.pyplot as plt
             plt.show()
         return fig, ax
 
     @staticmethod
-    def plot_curtains(ds: atmoz_dataset, **kwargs) -> Dict[GroupKey, tuple]:
+    def plot_curtains(ds: AtmozDataset, **kwargs) -> Dict[GroupKey, tuple]:
         """One curtain per (instrument, processing type, site) in *ds*: ``{group key: (fig, ax)}``."""
         out = {}
         for key, frames in TOLNET.group(ds).items():
