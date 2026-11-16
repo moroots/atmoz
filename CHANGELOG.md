@@ -6,17 +6,38 @@ All notable changes to atmoz are documented here. The format follows
 
 ## [Unreleased]
 
-Work after the 0.1.0 commit (planned as 0.1.1).
+Everything below ships in 0.1.0, which has not been published yet.
 
 ### Added
+- **One data shape for every source.** `atmoz.AtmozFrame` (a pandas DataFrame with a UTC `DatetimeIndex` as time axis `t`, `lat` / `lon` / `alt` (km)
+  axis columns, `units` per column and a `metadata` dict) and `atmoz.AtmozDataset` (a named collection of frames sharing one axis schema, units per frame).
+  `ds[key]`, `ds.select("*/OZONE")`, `ds.frame` (the only frame), `ds.inventory()` (one row per frame: lat, lon, altitude range, units, time span),
+  `frame.location`, `frame.convert_units(column, unit)`; pandas methods work on a frame and broadcast over a dataset (`ds.resample("1h").mean()`).
+  `ppbv` is normalised to `ppb`. Every `download()` returns an `AtmozDataset`; see `docs/conventions.md` (Containers, Units, Site metadata).
+- **Frame keys per source**: AirNow `"{IntlAQSCode}/{PARAMETER}"`; AQS `"{state}{county}{site}/{parameter code}"`; TOLNet one frame per file (long: `alt`, `value`, `lat`, `lon`,
+  units read from the file); UCN one frame per ceilometer, day and level (`"CEILO-9_20261101_L2"`, `value` is the attenuated backscatter);
+  GEOS-CF one frame per variable (`alt` in km and `lev` on `chm` / `met3d`; `chm` also reads `met3d` for the layer heights).
+- `atmoz.collocate(obs, model, obs_col=, model_col=, max_gap=)`: interpolates a model frame onto an observation's times (linear in time, NaN beyond `max_gap`) and altitudes
+  (per-time profile interpolation, so GEOS-CF layer heights may differ per time), converting the model to the observation unit. Returns an `AtmozFrame` with `obs` and `model`
+  columns. New guide `docs/collocation.md` (TOLNet versus GEOS-CF).
+- **EPA AQS** `download()` filters and caching: the parsed file is cached as parquet next to the zip; filters `bbox`, `start_date` / `end_date`, `site`, `state`, `county`
+  (codes or names), `parameter`, `poc` and `where={column: value}` are applied before the per-site split. Hourly files only (UTC time from `Date GMT` + `Time GMT`,
+  the local standard time stays in a `local_time` column); units are declared as the file gives them (ozone stays ppm).
 - `atmoz.surface.mda8` / `mda8_aqs`: ozone 8-hour averages and the daily maximum 8-hour average (MDA8) per EPA 40 CFR 50 Appendix U
   (truncation, 6-of-8 and 0.567 ppm sum rules, 17 windows, 13-of-17 day validity, exceptional events, collocated monitors).
+  `mda8_aqs` accepts a raw AQS DataFrame, an `AtmozDataset` or an `AtmozFrame`.
 - `atmoz.lidar.UCN`: Unified Ceilometer Network (Hampton University) data, levels L2 (default) and L3, one file per
-  ceilometer per UTC day. `UCN.download()` returns an `atmoz_dataset` of DataFrames (one row per time step, profile variables
-  as list columns), `UCN.fetch()` the cached parquet paths, `UCN.available()` a size preview, `UCN.sites()` the ceilometer list,
-  `UCN.stack()` / `UCN.backscatter()` helpers. The cache keeps one compact parquet file per day (about half the NetCDF size).
+  ceilometer per UTC day. `UCN.download()` returns an `AtmozDataset`, `UCN.fetch()` the cached parquet paths, `UCN.available()` a size preview,
+  `UCN.sites()` the ceilometer list, `UCN.stack()` / `UCN.backscatter()` helpers. The cache keeps one compact parquet file per day (about half the NetCDF size).
   Gentle on the server (2 workers, request pacing, `atmoz/<version>` User-Agent, never re-downloads final days) and bounded:
   requests over ~1 GB raise `RequestTooLargeError` unless `allow_large=True`. Verified against the live server (first download and conversion). L0b (raw 16 s profiles) is planned: `level="L0b"` raises a clear error and `UCN.planned_levels` lists it.
+- **GEOS-CF** `GEOS_CF.download(lat, lon, start, end, ...)` / `GEOS_CF.fetch(...)` (classmethods). Gas species are in ppb by default (`units="mol/mol"` keeps the raw values). The cache is
+  one parquet file per month (assimilation data older than two weeks is final; newer data and forecasts expire after three hours), and a bad variable or any failed month raises.
+  Checked against the live server: `chm` is the real profile product (36 model levels), `chm_sfc` and `met3d` collections, the forecast uses the `.latest` dataset, the server's GrADS
+  time axis is decoded from its attributes, and requests are retried because the server often answers 502.
+- **TOLNet** (`atmoz/lidar/tolnet.py`): `TOLNET.download()` / `fetch()` are classmethods using the shared session pool and file cache, all-or-nothing (`DownloadError`; `NoDataError` when nothing
+  matches). `fetch()` takes `min_date` / `max_date` / `**query` and `dest_dir=` (default: the cache). `TOLNET.group(ds)`, `TOLNET.open_hdf()` and `TOLNET.plot_curtains(ds)`;
+  `TOLNET.plot_curtain` delegates to `atmoz.plotting.curtain`. Value and altitude units are read from the file (m is converted to km).
 - `atmoz.plot` / `atmoz.plotting`: opinionated plots with one entry point. `az.plot("curtain", df)` and
   `az.plot.curtain(df)` are the same call; `curtain`, `profile`, `windrose` (windrose) and `site_map` (plotly) so far.
   Matplotlib plots return `(fig, ax)`; plotly plots return the `Figure`. Unknown names suggest the closest match.
@@ -27,53 +48,35 @@ Work after the 0.1.0 commit (planned as 0.1.1).
 - `atmoz.resources.utilities`: the plumbing every data source shares (thread pool with all-or-nothing failure, shared HTTP sessions).
 - Typed exceptions `NoDataError` and `RequestTooLargeError`; `SessionHandler(user_agent=...)`, and the shared session now
   identifies itself as `atmoz/<version>`.
-- Extras: `plots` (plotly, windrose, geopandas, shapely); `lidar` now includes `xarray` and `netcdf4`.
-- `docs/conventions.md` (the package-wide process and naming), `docs/plotting.md`, and `docs/references/epa-40cfr50-appendix-u/`:
-  the EPA rules for 8-hour ozone averages and the daily maximum (the spec for `atmoz.surface.mda8`), as text and JSON.
+- Extras: `plots` (plotly, windrose, geopandas, shapely); `lidar` includes `xarray`, `netcdf4` and `h5py`.
+- `docs/conventions.md` (the package-wide process, naming, containers, units, site metadata and collocation), `docs/collocation.md`, `docs/plotting.md`, and
+  `docs/references/epa-40cfr50-appendix-u/`: the EPA rules for 8-hour ozone averages and the daily maximum (the spec for `atmoz.surface.mda8`), as text and JSON.
 - GitHub Actions CI (`.github/workflows/ci.yml`) next to the GitLab CI; test notebooks in `dev/notebooks/`.
-- Tests for UCN, plotting, unit conversion and the GEOS-CF cache.
+- Tests for the containers, collocation, AirNow, AQS, TOLNet, UCN, plotting, unit conversion and the GEOS-CF cache.
 
 ### Changed
-- **GEOS-CF redesigned** to follow the conventions. `GEOS_CF.download(lat, lon, start, end, ...)` (classmethod) returns an `atmoz_dataset` of
-  DataFrames: surface collections (`aqc`, `met`) as one frame indexed by UTC time, `chm` profiles as one time x level frame per variable.
-  Gas species are converted to ppbv by default (`units="mol/mol"` keeps the raw values). `GEOS_CF.fetch(...)` fills the cache and returns
-  `{file_name: parquet_path}`. The cache is one parquet file per month (assimilation data older than two weeks is final; newer data and
-  forecasts expire after three hours), and a bad variable or any failed month raises instead of printing a warning. Removed: the stateful
-  `GEOS_CF().fetch()` / `.data`, `force_download` (use `refresh=True`) and `add_altitude_coords` (get `zl` from the new `met3d` collection instead).
-  Checked against the live server: `chm` now points at the real profile product (36 model levels; the old URL was surface-only), `chm_sfc`,
-  `met3d` are new, the forecast uses the `.latest` dataset (the old URL was a directory), the non-existent `oh` is gone from the defaults, the
-  server's GrADS time axis is decoded from its attributes (xarray decoded it wrongly and the values can arrive damaged), and requests are retried
-  because the server often answers 502.
-- **TOLNet consolidated into `atmoz/lidar/tolnet.py`** and brought in line with the conventions. `TOLNET.download()` / `fetch()` are classmethods;
-  `download()` returns an `atmoz_dataset` (`.data == {file_name: DataFrame}`, per-file metadata in `.metadata["info"]`) instead of filling `self.data`,
-  uses the shared session pool and file cache, and is all-or-nothing (`DownloadError`; `NoDataError` when nothing matches).
-  `fetch()` takes `min_date`/`max_date`/`**query` and `dest_dir=` (default: the cache). New `TOLNET.group(ds)` (the old `data[key][date]` shape),
-  `TOLNET.open_hdf()` and `TOLNET.plot_curtains(ds)`. `TOLNET.plot_curtain` now delegates to `atmoz.plotting.curtain` (one implementation; the
-  `xlims`, `time_resolution`, `use_contourf` options are gone). Removed: `TOLNET.data` / `meta_data` / `_errors`, `change_timezone`,
-  `tolnet_curtains` (use `plot_curtains`), and `download(GEOS_CF=True)`. The HDF helpers moved from `atmoz.resources.importData` to `atmoz.resources.hdf`
-  (and its duplicate `TOLNet` class is gone). `h5py` is now in the `lidar` extra.
-- **`AirNow.download()` returns the same shape for both endpoints:** `ds.data` is `{name: DataFrame}` and `ds.metadata` a dict.
-  For `endpoint="airnow"` the per-site table moved from `ds.metadata` to `ds.metadata["sites"]`, and the frame is `ds.frame`
-  (new `atmoz_dataset.frame` shortcut for single-frame results).
+- **`AirNow.download(endpoint=...)` is the single entry point** and returns an `AtmozDataset` for both endpoints (one frame per site and parameter); `ds.metadata` is a dict
+  (`endpoint`, `files`, `rows`; AirNow API adds `start`, `end`, `query` and the per-site table `sites`; AQS adds `filters`). `AirNow.fetch(endpoint=...)` returns raw files `{name: path}`.
 - **`atmoz.surface` restructured.** One module per backend, with the same process and names:
-  `AQS.py` (`EPA_PreGen`, was `epa_pregen`), `AirNow_API.py` (`AirNowAPI`, `AirNowParams`, `make_windows`) and
-  `AirNow.py` (the `AirNow` facade). `AirNow.download(endpoint=...)` is the single entry point and always returns an
-  `atmoz_dataset` (AirNow API: `.data` is a DataFrame; AQS: `.data` is `{filename: DataFrame}`);
-  `AirNow.fetch(endpoint=...)` returns raw files `{name: path}`. `import_data` / `download_data` are now `download` / `fetch`, and
-  `_parameters_validator` is `EPA_PreGen._validate`. Dead state (`_data`, `_queries_strings`, `_process`, `_nest`) is removed.
-- **Package-wide naming** (see `docs/conventions.md`): every source has `download()` and `fetch()`; `TOLNET.import_data()` is now
-  `TOLNET.download()` and `TOLNET.download()` (to disk) is now `TOLNET.fetch()`.
-- `TOLNET.plot_curtain`, `makePlots.vertical_profile`, `plot_curtain`, `plot_wind_rose` now return `(fig, ax)` and no
-  longer call `plt.show()`/`plt.close()`; pass `show=True` to `TOLNET.plot_curtain` for the old behaviour in scripts.
-  `makePlots.site_map` returns the plotly figure instead of showing it.
+  `AQS.py` (`EPA_PreGen`), `AirNow_API.py` (`AirNowAPI`, `AirNowParams`, `make_windows`) and `AirNow.py` (the `AirNow` facade).
+  `import_data` / `download_data` are now `download` / `fetch`, and `_parameters_validator` is `EPA_PreGen._validate`.
+- **Package-wide naming** (see `docs/conventions.md`): every source has `download()` (parsed, ready to use) and `fetch()` (raw files only); `TOLNET.import_data()` is now `TOLNET.download()`.
+- `TOLNET.plot_curtain`, `makePlots.vertical_profile`, `plot_curtain`, `plot_wind_rose` return `(fig, ax)` and do not call `plt.show()`/`plt.close()`; pass `show=True`
+  to `TOLNET.plot_curtain` in scripts. `makePlots.site_map` returns the plotly figure instead of showing it.
 - Curtain theme: DejaVu/Inter-style fonts instead of `Courier New`, figure 11 x 4.4 in instead of 20 x 6, smaller labels.
+- The HDF helpers moved from `atmoz.resources.importData` to `atmoz.resources.hdf`.
+
+### Removed
+- `TOLNET.data` / `meta_data` / `_errors`, `change_timezone`, `tolnet_curtains` (use `plot_curtains`), `download(GEOS_CF=True)` and the curtain options `xlims`, `time_resolution`, `use_contourf`
+  (slice the frame before plotting).
+- The stateful `GEOS_CF().fetch()` / `.data`, `force_download` (use `refresh=True`) and `add_altitude_coords` (the `alt` column comes from `met3d`'s `zl`).
 
 ### Fixed
 - `EPA_PARAMETERS` was checked against EPA's server for 2024: all 79 parameter/resolution combinations behave as the table says and no listed
   data file is missing from it.
 - UCN conversion could crash the interpreter (segfault) intermittently: the HDF5 library under netCDF4 is not thread-safe and two workers converted files at once. NetCDF reads are now serialized.
 - `surface.utilities.make_datetime` raised `TypeError` on the datetime `Date` columns the AQS reader returns; it now takes datetime or text dates.
-- `dataframe.convert_units()` and unit-aware arithmetic raised `NameError` (the pint registry was never defined); it is now built lazily and includes ppbv/ppmv/pptv.
+- Unit conversion raised `NameError` (the pint registry was never defined); it is now built lazily and includes ppb/ppm/ppt.
 - `merge_dicts` shared nested dicts with the module defaults, so `TOLNET.plot_curtain` lost its colorbar label and ticks
   after the first call. It now deep-copies, and `apply_plot_params` no longer mutates its input.
 - `makePlots.site_map` raised `TypeError` (`*params["map"]` instead of `**params["map"]`).
@@ -129,10 +132,3 @@ First tagged release.
 - API keys can no longer appear in exception messages, tracebacks, reprs, cache keys or saved Parquet metadata.
 - Package data (TOLNet watermark) is now included in the wheel; dev files are not.
 - `"Time Loca"` typo in the AQS dtype table, double slash in AQS URLs, `p` reassigned inside the validator loop.
-
-### Known issues
-- `AirNow.download()` returns different types for `endpoint="airnow"` (`atmoz_dataset`) and `"aqs"` (`dict` of DataFrames); to be unified.
-- `atmoz.resources.atmoz_dataclasses` references a `ureg` unit registry whose definition is commented out, so its unit conversion raises `NameError`.
-- AirNow window logic assumes the API returns the `endDate` hour (inclusive); see `AirNow.window_end_inclusive`.
-- `EPA_PARAMETERS` (which parameter has which resolutions) has not been re-checked against EPA's current file list.
-- GEOS-CF keeps its own `cache_dir` instead of the shared cache.

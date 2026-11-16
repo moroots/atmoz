@@ -2,7 +2,7 @@
 
 Access and visualize NASA [TOLNet](https://tolnet.larc.nasa.gov/) (Tropospheric Ozone Lidar Network) data.
 
-TOLNet is a network of ground-based ozone lidar instruments operated across North America by NASA and partner agencies. This module queries the TOLNet REST API, downloads JSON data files into memory, and renders time-altitude curtain plots.
+TOLNet is a network of ground-based ozone lidar instruments operated across North America by NASA and partner agencies. This module queries the TOLNet REST API, downloads JSON data files (cached on disk), and renders time-altitude curtain plots.
 
 ```python
 from atmoz.lidar import TOLNET
@@ -17,11 +17,14 @@ Install the extra first: `pip install "atmoz[lidar]"`. JSON downloads need no lo
 ```python
 from atmoz.lidar import TOLNET
 
-# One week of high-resolution ozone profiles -> an atmoz_dataset (cached on disk, all-or-nothing)
+# One week of high-resolution ozone profiles -> an AtmozDataset (cached on disk, all-or-nothing)
 ds = TOLNET.download("2025-07-28", "2025-08-01", product_type=[4], processing_type=[1])
-ds.data                  # {file_name: DataFrame}  (UTC time index, altitude columns)
+ds.inventory()                               # one row per file: site, altitude range, unit, time span
+frame = ds[next(iter(ds))]                   # an AtmozFrame, keyed by file name
+frame.df.head()                              # UTC time index; alt (km), value, lat, lon
+frame.units                                  # {"alt": "km", "value": "ppb", ...} (read from the file)
 
-groups = TOLNET.group(ds)                    # {(instrument, processing, "latxlon"): {"YYYY-MM-DD": DataFrame}}
+groups = TOLNET.group(ds)                    # {(instrument, processing, "latxlon"): {"YYYY-MM-DD": AtmozFrame}}
 TOLNET.plot_curtains(ds)                     # one curtain per instrument / site
 TOLNET.plot_curtain(groups[next(iter(groups))], title="JPL SMOL-2")
 ```
@@ -77,9 +80,9 @@ Use either a point + radius **or** a bounding box — not both.
 ## `TOLNET` Class
 
 Everything TOLNet lives in `atmoz/lidar/tolnet.py`: the API client, HDF reading and plotting. It follows the package
-[conventions](conventions.md): `download()` returns an `atmoz_dataset`, `fetch()` returns `{name: Path}`.
+[conventions](conventions.md): `download()` returns an `AtmozDataset`, `fetch()` returns `{name: Path}`.
 
-### `TOLNET.download(min_date, max_date, **query) → atmoz_dataset`
+### `TOLNET.download(min_date, max_date, **query) → AtmozDataset`
 
 Lists the matching files, downloads each JSON file (4 threads, cached), and parses them.
 
@@ -100,19 +103,29 @@ ds = TOLNET.download(
 | `use_cache`, `refresh`, `cache_dir` | | `True`, `False`, shared cache | Near-real-time files are re-checked hourly; final files never change. |
 | `silent`, `show_traceback`, `session_handler` | | | The usual options. |
 
-**Returns** an `atmoz_dataset` with `datatype="lidar"`:
+**Returns** an `AtmozDataset` (`source="TOLNet"`), **one frame per file**, keyed by the file name:
 
-* `ds.data`: `{file_name: DataFrame}`. Index = UTC time, columns = altitude (km), values = ozone (ppbv).
+* `ds[file_name]` is an `AtmozFrame` in long format: UTC `time` index (repeated once per altitude), columns `alt` (km), `value` (ozone),
+  constant `lat` / `lon` (the instrument), and any other per-point variable of the file with the same shape as `value` (uncertainties, say).
+* Units are **read from the file**: `frame.units["value"]` (normally `ppb`; `ppbv` is normalised), altitude is converted to km from the unit
+  the file declares (m or km). Nothing is assumed for `value` if the file does not say.
+* `frame.metadata`: `instrument`, `processing`, `product`, `file`, `file_id`, `near_real_time`, `latitude`, `longitude`, `start_data_date`, `fileInfo`.
 * `ds.metadata["info"]`: TOLNet's metadata per file (`LATITUDE.INSTRUMENT`, `LONGITUDE.INSTRUMENT`, `fileInfo`, ...).
 * `ds.metadata["groups"]`: `"instrument|processing|latxlon"` → the file names of that instrument.
 * `ds.metadata["file_list"]`: the API's file list as a DataFrame.
 
+```python
+frame = ds[next(iter(ds))]
+wide = frame.df.pivot(columns="alt", values="value")      # time x altitude, the shape az.plot.curtain takes
+lat, lon = frame.location                                 # the instrument, e.g. for GEOS_CF.download(lat, lon, ...)
+```
+
 **Raises** `NoDataError` if nothing matches, `DownloadError` if any file fails (nothing is returned; finished files stay cached).
-The old `GEOS_CF=True` option is gone: call `GEOS_CF.download(...)` at the instrument's coordinates instead.
+To compare with GEOS-CF, call `GEOS_CF.download(...)` at the instrument's coordinates (`frame.location`) and use [`atmoz.collocate`](collocation.md).
 
 ### `TOLNET.group(ds) → dict`
 
-`{(instrument, processing, "latxlon"): {"YYYY-MM-DD": DataFrame}}`, the shape the curtain plot takes.
+`{(instrument, processing, "latxlon"): {"YYYY-MM-DD": AtmozFrame}}`, the shape the curtain plot takes.
 
 ### `TOLNET.fetch(min_date, max_date, *, file_type="json", dest_dir=None, **query) → {file_name: Path}`
 
@@ -134,8 +147,8 @@ figs = TOLNET.plot_curtains(ds)                            # {group key: (fig, a
 ```
 
 Both return `(fig, ax)`; options are those of [`curtain`](plotting.md) (`title`, `tz`, `altitude_units`, `sonde`, `style`, `figsize`, `nrt`,
-`watermark`), plus `show=True` to call `plt.show()` in scripts. The old `xlims`, `time_resolution` and `use_contourf` options are gone: slice the
-DataFrames before plotting (`df.loc["2025-07-28":"2025-07-30"]`, `df.resample("30min").mean()`).
+`watermark`), plus `show=True` to call `plt.show()` in scripts. `plot_curtain` takes a long `AtmozFrame` (it pivots to time x altitude itself),
+a wide DataFrame, or a dict of them. To plot a time window, slice the frame first (`frame.df.loc["2025-07-28":"2025-07-30"]`).
 
 ### Catalogue helpers (instance methods)
 
@@ -168,19 +181,24 @@ from atmoz.lidar import UCN
 UCN.sites()                                       # ceilometer numbers and site names
 UCN.available(9, "2026-10-01", "2026-10-31")      # what a request would fetch (and its size), no data downloaded
 
-ds = UCN.download(9, "2026-11-01")                # McMillan Reservoir, DC; always an atmoz_dataset
-df = ds.data["CEILO-9_20261101_L2"]               # a DataFrame: one row per 10 minutes, indexed by UTC time
-df["nsl_ml_height"]                               # an ordinary column
-df["attenuated_backscatter"].iloc[0]              # a profile: one numpy array (1540 heights) per row
-df.attrs["altitude_m"]                            # heights, list labels, units, file attributes
+ds = UCN.download(9, "2026-11-01")                # McMillan Reservoir, DC; an AtmozDataset
+frame = ds["CEILO-9_20261101_L2"]                 # one AtmozFrame per ceilometer, day and level
+frame.df.head()                                   # long: UTC time index, alt (km), value, per-time scalars, lat, lon
+frame.units["value"]                              # "km^-1.sr^-1": value is the attenuated backscatter
+frame.df["nsl_ml_height"]                         # a per-time scalar, repeated along altitude
+frame.metadata["altitude_m"]                      # heights in m, plus list labels and the file attributes
 
 month = UCN.download(9, "2026-10-01", "2026-10-31", skip_missing=True)
-both = UCN.stack(month, 9)                        # all days joined into one DataFrame
+both = UCN.stack(month, 9)                        # all days of ceilometer 9 joined into one AtmozFrame
 UCN.backscatter(both).plot(x="time")              # (time x altitude) xarray DataArray for plotting
 
 UCN.download(9, "2026-11-01", level="L3")         # hourly statistics instead
 UCN.fetch(9, "2026-11-01")                        # {name: parquet path}: only put the files on disk
 ```
+
+L3 frames have one row per hour, an all-NaN `alt` column (so L2 and L3 frames share one schema) and no `value`. Profile-like variables that are not
+per altitude (cloud layers, say) are not in the frame; they are listed in `frame.metadata["not_in_frame"]` and stay in the cached parquet.
+`lat` / `lon` columns are present when the file carries the ceilometer's position.
 
 **Choosing data.** Ceilometer number(s), UTC day range (inclusive), `level`, and `skip_missing`. Everything else (time of day,
 height range) is a slice of the DataFrame or the array from `UCN.backscatter()`. There is no selection by state or bounding box yet:
@@ -196,7 +214,7 @@ the ceilometer list carries no coordinates.
 
 **The cache** (`~/.atmoz/cache/ucn`) holds one parquet file per ceilometer-day, not the NetCDF: about half the size for L2.
 Profile variables are list columns, and heights, labels, units and attributes are stored in the file's metadata.
-`fetch()` therefore returns parquet paths; `pandas.read_parquet` reads them.
+`fetch()` therefore returns parquet paths; `pandas.read_parquet` reads them (profile variables as one array per row, the wide form of the cache), while `download()` turns each file into a long `AtmozFrame`.
 
 **Missing days.** UCN answers a missing day with a 404 (or an ordinary page). By default that raises `DownloadError`
 (all-or-nothing); with `skip_missing=True` those days are left out and listed in `ds.metadata["missing"]`. A missing day is never cached.

@@ -20,10 +20,22 @@ interactive ones) return the plotly `Figure`.
 
 | Plot | Backend | What it draws |
 |---|---|---|
-| `curtain` | matplotlib | Time-altitude curtain from a DataFrame (time index, altitude columns) or a dict of them such as one entry of `TOLNET.group(ds)` |
+| `curtain` | matplotlib | Time-altitude curtain from a DataFrame (time index, altitude columns) or a dict of them |
 | `profile` | matplotlib | Vertical profiles with optional uncertainty bands |
 | `windrose` | matplotlib (windrose) | Wind rose from direction and speed |
 | `site_map` | plotly | Interactive map of site locations |
+
+`curtain` takes the wide form, a DataFrame with time as the index and altitude as the columns. A long `AtmozFrame` (what TOLNet and
+GEOS-CF return) is pivoted first:
+
+```python
+frame = ds[next(iter(ds))]                                  # TOLNet frame: UTC time index; alt, value
+wide = frame.df.pivot(columns="alt", values="value")
+fig, ax = az.plot.curtain(wide)
+```
+
+`TOLNET.plot_curtain(frame)` and `TOLNET.plot_curtains(ds)` do the pivot for you (and add the TOLNet watermark). GEOS-CF layer heights differ
+per time, so pivot its profiles on `lev` or collocate them onto a lidar's altitudes with [`atmoz.collocate`](collocation.md) first.
 
 `windrose` and `site_map` need the optional plotting packages: `pip install "atmoz[plots]"`.
 

@@ -21,9 +21,9 @@ and lighter design. It is a dev / science tool: it makes common things fast and 
   Streamed to a disk cache, parsed with Arrow's multi-threaded CSV reader (full-precision `float64`
   coordinates, `category` text columns), downloaded in parallel, all-or-nothing on failure.
 * **TOLNet ozone lidar** (`atmoz.lidar`): query, download and plot NASA TOLNet profiles.
-* **UCN ceilometers** (`atmoz.lidar`): Unified Ceilometer Network 10-minute backscatter and boundary-layer data as DataFrames, cached compactly as parquet. L0b (raw 16 s profiles) is planned.
-* **GEOS-CF model output** (`atmoz.models`): point extractions through OPeNDAP, returned as DataFrames (surface series or time x level profiles) and cached.
-* **Data classes** (`atmoz.dataclasses`): `AtmoFrame` / `AtmoDataset` containers.
+* **UCN ceilometers** (`atmoz.lidar`): Unified Ceilometer Network 10-minute backscatter and boundary-layer data, cached compactly as parquet. L0b (raw 16 s profiles) is planned.
+* **GEOS-CF model output** (`atmoz.models`): point extractions through OPeNDAP, returned as frames (surface series or long time x level profiles) and cached.
+* **Data classes** (`atmoz.dataclasses`): every `download()` returns an `AtmozDataset` of `AtmozFrame`s (UTC time index, `lat` / `lon` / `alt` columns, units in `frame.units`, metadata). `atmoz.collocate` puts model output on a lidar's times and altitudes.
 * **Shared plumbing**: thread-safe HTTP sessions with retries, a file cache, a `.atmoz.env` secret store.
 
 ## Installation
@@ -43,26 +43,37 @@ See the [installation guide](docs/installation.md).
 ```python
 from atmoz.surface import AirNow
 
-# Bulk EPA AQS: national hourly ozone for 2025. Always an atmoz_dataset;
-# ds.data == {"hourly_44201_2025.csv": DataFrame}
-ds = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025)
+# Bulk EPA AQS: hourly ozone for Maryland in 2025. An AtmozDataset with one AtmozFrame per site and parameter.
+ds = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025, state="Maryland")
+frame = ds["240338003/44201"]                 # key: "{state}{county}{site}/{parameter code}"
+frame.df.head()                               # UTC time index; value, lat, lon, poc, local_time, ...
+frame.units                                   # {"value": "ppm", ...}; frame.convert_units("value", "ppb") converts
+ds.inventory()                                # one row per frame: lat, lon, unit, time span
 
-# Only what you need: a bounding box and a few columns
+# Only what you need: a bounding box and a date range
 ds_roi = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025,
-                         bbox=(-77.5, 38.5, -76.5, 39.5),
-                         columns=["Latitude", "Longitude", "Date GMT", "Time GMT", "Sample Measurement"])
+                         bbox=(-77.5, 38.5, -76.5, 39.5), start_date="2025-06-01", end_date="2025-08-31")
 
 # Live AirNow API (free key from https://docs.airnowapi.org/): save it once, use it forever
 AirNow.set_api_key()
-dataset = AirNow.download(endpoint="airnow", start_date="2025-08-01", end_date="2025-08-07", parameters=["OZONE", "PM25"])
-dataset.frame, dataset.metadata["sites"]
+ds = AirNow.download(endpoint="airnow", start_date="2025-08-01", end_date="2025-08-07", parameters=["OZONE", "PM25"])
+ds.select("*/OZONE")                          # frames keyed "{IntlAQSCode}/{PARAMETER}"
+ds.resample("1h").mean()                      # pandas methods apply to every frame
 ```
 
 ```python
+import atmoz
 from atmoz.lidar import TOLNET            # pip install "atmoz[lidar]"
+from atmoz.models import GEOS_CF          # pip install "atmoz[models]"
 
-ds = TOLNET.download("2025-07-28", "2025-08-01", product_type=[4], processing_type=[1])   # an atmoz_dataset
-TOLNET.plot_curtains(ds)                                                                     # one curtain per instrument
+ds = TOLNET.download("2025-07-28", "2025-07-28", product_type=[4], processing_type=[1])   # an AtmozDataset, one frame per file
+TOLNET.plot_curtains(ds)                                                                      # one curtain per instrument
+
+# Compare with the model at the instrument's location
+obs = ds[next(iter(ds))]
+lat, lon = obs.location
+model = GEOS_CF.download(lat, lon, "2025-07-28", "2025-07-29", collection="chm", variables=["o3"])["o3"]
+atmoz.collocate(obs, model).df[["alt", "obs", "model"]]
 ```
 
 ## Credentials and caching
@@ -76,7 +87,8 @@ TOLNET.plot_curtains(ds)                                                        
 
 Guides live in [`docs/`](docs) (build them with `mkdocs serve`):
 [Installation](docs/installation.md) · [Configuration](docs/configuration.md) · [Caching](docs/caching.md) ·
-[Surface](docs/surface.md) · [Lidar](docs/lidar.md) · [Models](docs/models.md). Release notes: [CHANGELOG](CHANGELOG.md).
+[Conventions](docs/conventions.md) · [Surface](docs/surface.md) · [Lidar](docs/lidar.md) · [Models](docs/models.md) ·
+[Collocation](docs/collocation.md) · [Plotting](docs/plotting.md). Release notes: [CHANGELOG](CHANGELOG.md).
 
 ## Directory structure
 
@@ -88,9 +100,10 @@ atmoz/
 │   └── watermarks/
 ├── data_access/
 │   └── NASA.py
+├── collocation.py         # collocate(): model onto observation times and altitudes
 ├── dataclasses/
-│   ├── AtmoDataset.py
-│   └── AtmoFrame.py
+│   ├── AtmozDataset.py
+│   └── AtmozFrame.py
 ├── lidar/
 │   ├── tolnet.py
 │   └── ucn.py             # Unified Ceilometer Network

@@ -15,4 +15,5 @@ nav:
   - Surface (AirNow / EPA AQS): surface.md
   - Lidar (TOLNet, UCN): lidar.md
   - Models (GEOS-CF): models.md
+  - Collocation: collocation.md
   - Plotting: plotting.md

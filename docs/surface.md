@@ -14,16 +14,25 @@ from atmoz.surface import utilities as su                    # needs: pip instal
 ```python
 from atmoz.surface import AirNow
 
-# National hourly ozone for 2025 -> {"hourly_44201_2025.csv": DataFrame}
-ds = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025)
-data = ds.data  # {filename: DataFrame}
-df = data["hourly_44201_2025.csv"]
+# Hourly ozone for one Maryland county in 2025 -> an AtmozDataset, one frame per site and parameter
+ds = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025,
+                     state="Maryland", county="Prince George's")
+ds.keys()                                  # "{state}{county}{site}/{parameter code}", e.g. "240338003/44201"
+frame = ds["240338003/44201"]              # an AtmozFrame
+frame.df.head()                            # UTC time index; value, lat, lon, poc, local_time, ...
+frame.units                                # {"value": "ppm", ...}
+frame.metadata["state_name"]
 
 # Live AirNow API (needs a free key, saved once, see "API key" below)
 AirNow.set_api_key()                      # prompts, then stores it for every future session
 ds = AirNow.download(endpoint="airnow", start_date="2025-08-01", end_date="2025-08-07", parameters=["OZONE", "PM25"])
-ds.frame, ds.metadata["sites"]
+ds["840240053001/OZONE"]                   # "{IntlAQSCode}/{PARAMETER}"
+ds.select("*/OZONE").inventory()           # one row per ozone site: lat, lon, unit, time span
+ds.metadata["sites"]                       # DataFrame, one row per monitoring station
 ```
+
+Both sources return an `AtmozDataset` of `AtmozFrame`s (see [Conventions](conventions.md#containers)): time is the UTC index, `lat` / `lon` are
+columns, units are in `frame.units`.
 
 Everything is cached on disk (see [Caching](caching.md)), so re-running a script is instant, and every
 download is **all-or-nothing**: if one request or file fails, `atmoz.exceptions.DownloadError` is raised
@@ -39,11 +48,12 @@ AirNow.download(endpoint="aqs" | "airnow", **kwargs)
 
 | `endpoint` | Backend | Returns | Use when |
 |------------|---------|---------|----------|
-| `"aqs"` | `EPA_PreGen.download()` | `atmoz_dataset`; `.data` is `{filename: DataFrame}` | Historical bulk files for whole years |
-| `"airnow"` (default) | `AirNowAPI.download()` | `atmoz_dataset`; `.data` is `{name: DataFrame}` (one frame, also `ds.frame`) | Recent / near-real-time observations from the live API |
+| `"aqs"` | `EPA_PreGen.download()` | `AtmozDataset`, keys `"{state}{county}{site}/{parameter code}"` | Historical bulk files for whole years |
+| `"airnow"` (default) | `AirNowAPI.download()` | `AtmozDataset`, keys `"{IntlAQSCode}/{PARAMETER}"` | Recent / near-real-time observations from the live API |
 
-Both endpoints return an `atmoz_dataset` (`datatype="surface"`) with the same shape: `.data` is `{name: DataFrame}` and `.metadata` is a dict
-(`endpoint`, `files`, `rows`; the AirNow API adds `start`, `end` and `sites`). `ds.frame` gives the DataFrame when there is only one.
+Both endpoints return an `AtmozDataset` with one `AtmozFrame` per site and parameter. `ds.metadata` is a dict (`endpoint`, `files`, `rows`;
+AQS adds `filters`, the AirNow API adds `start`, `end`, `query` and `sites`). `ds.frame` gives the frame when there is only one; an empty
+result is an empty dataset. `AirNow.fetch(endpoint=...)` returns raw files `{name: path}` instead.
 
 ### `endpoint="aqs"` kwargs
 
@@ -53,8 +63,12 @@ Both endpoints return an `atmoz_dataset` (`datatype="surface"`) with the same sh
 | `resolutions` | `str \| List[str]` | required | `"hourly"`, `"daily"`, `"8hour"`, `"annual"`. |
 | `years` | `int \| List[int]` | required | Calendar year(s). |
 | `max_workers` | `int` | `5` | Download threads. |
-| `columns` | `List[str]` | `None` (all) | Load only these columns. |
-| `bbox` | `(min_lon, min_lat, max_lon, max_lat)` | `None` (all) | Keep only rows inside the box, applied while streaming. |
+| `bbox` | `(west, south, east, north)` | `None` | Keep only sites inside the box. |
+| `start_date`, `end_date` | `str \| date` | `None` | Inclusive local (standard time) dates; the files are still chosen by `years`, these trim the rows. |
+| `site` | `str \| (state, county, site) \| list` | `None` | An AQS id (`"240230002"`) or a `(state, county, site)` tuple. |
+| `state`, `county` | `str \| int \| list` | `None` | Codes (`"24"`, `"031"`, zero-padded for you) or names (`"Maryland"`). |
+| `parameter`, `poc` | `str \| int \| list` | `None` | Rows of one AQS parameter code (`44201`) or POC (monitor number) inside the file. |
+| `where` | `dict` | `None` | `{column: value-or-list}` for any column of the file, e.g. `{"Method Code": "087"}`. |
 | `use_cache` | `bool` | `True` | `False` keeps nothing on disk. |
 | `refresh` | `bool` | `False` | Force a fresh download. |
 | `max_age` | `"auto" \| timedelta \| None` | `"auto"` | `"auto"`: current and previous year are re-checked daily (cheap `ETag` check), older years are frozen. `None`: never re-check. |
@@ -62,16 +76,29 @@ Both endpoints return an `atmoz_dataset` (`datatype="surface"`) with the same sh
 | `silent` | `bool` | `False` | No progress bar / warnings. |
 | `show_traceback` | `bool` | `False` | Full tracebacks for failures. |
 
-**Returns:** `Dict[str, pd.DataFrame]` in the order requested; keys are file names (`"hourly_44201_2025.csv"`).
+**Returns** an `AtmozDataset` (`source="EPA AQS"`). Only **hourly** files can be downloaded as frames (other resolutions raise `ValueError`; use
+`fetch()` and `read_aqs_zip()` for them). Each zip is parsed once and cached next to it as parquet, and the filters read that parquet, so a
+second query on the same year does not touch the network or the big CSV.
+
+* Key: `"{state}{county}{site}/{parameter code}"`, e.g. `"240230002/44201"`.
+* Frame: UTC `time` index (hour-beginning, from `Date GMT` + `Time GMT`), columns `value`, `lat`, `lon`, `poc`, `local_time`
+  (naive local standard time, hour-beginning; MDA8 uses it) and, when present, `mdl`, `qualifier`, `method_type`, `method_code`.
+  Several POCs at a site share the frame; the `poc` column tells them apart.
+* Units: `frame.units["value"]` is the unit of the file; **ozone stays in ppm**. Convert with `frame.convert_units("value", "ppb")`.
+* `frame.metadata`: `site_id`, `state_code`, `county_code`, `site_num`, `state_name`, `county_name`, `parameter_code`, `parameter_name`,
+  `datum`, `units_raw`, `lat`, `lon`, `pocs`.
 
 ```python
-# Several parameters / resolutions / years in one call (every valid combination)
+# Several parameters in one call (every valid combination), trimmed to a box and a few weeks
 ds = AirNow.download(
     endpoint="aqs",
-    parameters=["ozone", "pm25", "no2"],
-    resolutions=["hourly", "daily"],
+    parameters=["ozone", "no2"],
+    resolutions="hourly",
     years=[2024, 2025],
+    bbox=(-77.5, 38.5, -76.5, 39.5),
+    start_date="2025-06-01", end_date="2025-08-31",
 )
+ds.select("*/44201").inventory()          # the ozone sites in the box
 ```
 
 **Do it your way.** `EPA_PreGen.fetch(...)` (or `AirNow.fetch(endpoint="aqs", ...)`) only downloads (and caches) the zips and returns their paths, and
@@ -82,6 +109,8 @@ from atmoz.surface import EPA_PreGen, read_aqs_zip
 paths = EPA_PreGen.fetch("ozone", "hourly", [2023, 2024])     # {"hourly_44201_2023.csv": Path(...zip), ...}
 df = read_aqs_zip(paths["hourly_44201_2024.csv"], columns=["Latitude", "Longitude", "Date GMT", "Time GMT", "Sample Measurement"])
 ```
+
+`read_aqs_zip` and `fetch` give the plain AQS DataFrame (column schema below); `download()` is the one that gives frames.
 
 ### `endpoint="airnow"` kwargs
 
@@ -134,9 +163,9 @@ warning. It has not been re-verified against EPA's current file list; you can al
 | `aqi_by_county` | aqi_by_county | | ✓ | | ✓ |
 | `conc_by_monitor` | conc_by_monitor | | | | ✓ |
 
-### AQS DataFrame schema
+### AQS DataFrame schema (`read_aqs_zip`)
 
-Column sets differ between hourly, daily and annual files; every column in the file is loaded unless you pass
+This is the raw file as `read_aqs_zip()` returns it; `download()` renames and reduces the columns into frames (see above). Column sets differ between hourly, daily and annual files; every column in the file is loaded unless you pass
 `columns=`. Types applied when the column is present:
 
 | Column(s) | dtype | Notes |
@@ -146,7 +175,7 @@ Column sets differ between hourly, daily and annual files; every column in the f
 | `State Code`, `County Code`, `Site Num`, `Parameter Code`, `POC`, `Method Code`, `Time Local`, `Time GMT`, `Datum`, `Parameter Name`, `Units of Measure`, `Qualifier`, `Method Type`, `Method Name`, `State Name`, `County Name`, ... | `category` | Low-cardinality text; identifiers keep leading zeros (`"087"`). |
 | measurements (`Sample Measurement`, `MDL`, `Uncertainty`, `Arithmetic Mean`, ...) | numeric | Inferred. |
 
-**Units note:** ozone is reported in **ppm**; multiply by 1000 for ppb.
+**Units note:** ozone is reported in **ppm**; multiply by 1000 for ppb (on a frame: `frame.convert_units("value", "ppb")`).
 
 ---
 
@@ -178,15 +207,20 @@ one limitation (DEBUG-level logging from `urllib3`).
 ### `download(start_date, end_date, **kwargs)`
 
 ```python
-dataset = AirNowAPI.download(
+ds = AirNowAPI.download(
     start_date="2025-08-01",
     end_date="2025-08-07",                      # a bare date means "through 23:00 UTC that day"
     parameters=["OZONE", "PM25"],
     BBOX=["-77.5", "38.5", "-76.5", "39.5"],    # DC metro area
 )
-print(dataset.frame)               # pd.DataFrame of all observations (same as the one value in dataset.data)
-print(dataset.metadata["sites"])   # pd.DataFrame, one row per monitoring station
+ds.keys()                          # "{IntlAQSCode}/{PARAMETER}", e.g. "840240053001/OZONE"
+ds["840240053001/OZONE"].df        # UTC time index; value, lat, lon, raw_concentration, aqi, category, site_name, agency, aqs_code
+ds.metadata["sites"]               # pd.DataFrame, one row per monitoring station
 ```
+
+Returns an `AtmozDataset` (`source="AirNow API"`), one frame per site and parameter. The unit is the one the API reports, normalised
+(`ppb`, `ppm`, `µg/m3`) and kept in `frame.units["value"]`; frame metadata has `site`, `parameter`, `site_name`, `agency`, `aqs_code`
+and `intl_aqs_code`. The dataset metadata has `endpoint`, `files`, `rows`, `start`, `end`, `query` and `sites`.
 
 * **One request per window, you choose the size.** The default window is one day (`chunk="1D"`) because a
   request for the whole US, all pollutants and many days at once gets blocked by AirNow. Narrow the box or
@@ -234,13 +268,15 @@ Implements the EPA's rules (40 CFR Part 50, Appendix U; the spec is in `docs/ref
 ```python
 from atmoz.surface import mda8, mda8_aqs
 
-# Every site of an EPA AQS hourly ozone file (parameter 44201, ppm); one row per site and day
-ds = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2024)
-daily = mda8_aqs(ds.data["hourly_44201_2024.csv"])
+# Every site of an EPA AQS hourly ozone download; one row per site and day
+ds = AirNow.download(endpoint="aqs", parameters="ozone", resolutions="hourly", years=2024, state="Maryland")
+daily = mda8_aqs(ds)                       # an AtmozDataset, or one AtmozFrame such as ds["240338003/44201"]
 daily[daily["valid"]].groupby(["State Code", "County Code", "Site Num"])["mda8"].nlargest(4)   # for a design value
 
 # One site, any hourly Series (AirNow API data is in ppb; a UTC index needs the site's standard-time offset)
-r = mda8(series_ppb, units="ppb", utc_offset=-5)
+frame = AirNow.download(endpoint="airnow", start_date="2025-08-01", end_date="2025-08-07", parameters="OZONE",
+                        BBOX=["-77.5", "38.5", "-76.5", "39.5"])["840240053001/OZONE"]
+r = mda8(frame.df["value"], units=frame.units["value"], utc_offset=-5)
 ```
 
 `mda8(series, *, units="ppb", utc_offset=None, exceptional_events=None, level_ppb=70)` returns a DataFrame indexed by local `date`:
@@ -257,7 +293,10 @@ fewer it is valid only if the sum of the available hours exceeds 567 ppb; averag
 **hour-beginning local standard time**, never daylight saving: AQS's `Date Local` / `Time Local` already are, and for a timezone-aware index you pass
 `utc_offset` (e.g. `-5` for US Eastern all year). Collocated monitors (POCs) are combined per site as EPA 2(b) says
 (`combine_collocated`: the primary POC, default the lowest number, with gaps filled by the mean of the others; pass `primary={site_tuple: poc}`
-to `mda8_aqs` if you know it). `mda8_aqs` takes column names (`value`, `date`, `hour`, `site`, `poc`) and `units` (default `"ppm"`).
+to `mda8_aqs` if you know it). `mda8_aqs` accepts a raw AQS DataFrame (`read_aqs_zip` output), an `AtmozDataset` or an `AtmozFrame` from `AirNow.download(endpoint="aqs", ...)`.
+For frames it uses the `local_time`, `poc` and `value` columns and each frame's own `units["value"]`, and skips frames of other parameters;
+the result has the `State Code`, `County Code`, `Site Num` columns and the MDA8 comes back in the frame's unit. For a raw DataFrame it takes
+column names (`value`, `date`, `hour`, `site`, `poc`) and `units` (default `"ppm"`).
 
 Not included: exceptional-event flags are not read from AQS qualifiers (pass `exceptional_events=` yourself), and the design value
 (annual fourth-highest MDA8, 3-year average) is not computed.
@@ -429,12 +468,12 @@ su.count_duplicates(df, ["State Code", "County Code", "Site Num", "Date GMT", "T
 ### Filter national AQS file to a bounding box
 
 ```python
-from atmoz.surface import AirNow
+from atmoz.surface import EPA_PreGen, read_aqs_zip
 from atmoz.surface import utilities as su   # needs: pip install "atmoz[surface]"
 
-# Download
-ds = AirNow.download(endpoint="aqs", parameters=["ozone"], resolutions=["hourly"], years=[2025])
-df = ds.data["hourly_44201_2025.csv"]
+# The raw national file, as one DataFrame (no frames)
+paths = EPA_PreGen.fetch("ozone", "hourly", 2025)
+df = read_aqs_zip(paths["hourly_44201_2025.csv"])
 
 # Latitude / Longitude already arrive as float64, so there is nothing to convert.
 meta = su.extract_metadata(df)
@@ -446,32 +485,25 @@ df_roi   = su.df_geo_slice(df, gdf_roi)
 by_site = su.split_by_station(df_roi)
 ```
 
-To avoid ever loading the whole country, filter while reading instead:
+If you want frames rather than a DataFrame, filter while reading instead; nothing outside the box is ever loaded:
 
 ```python
+from atmoz.surface import AirNow
+
 ds = AirNow.download(
     endpoint="aqs", parameters="ozone", resolutions="hourly", years=2025,
-    bbox=(-77.5, 38.5, -76.5, 39.5),          # (min_lon, min_lat, max_lon, max_lat)
+    bbox=(-77.5, 38.5, -76.5, 39.5),          # (west, south, east, north)
 )
 ```
 
-### Select primary site (most observations)
+### Select the primary site (most observations)
 
 ```python
-site_counts = df_roi.groupby(["State Code", "County Code", "Site Num"])["Sample Measurement"].count()
-state, county, site = site_counts.idxmax()
+inv = ds.inventory().sort_values("rows", ascending=False)
+key = inv["key"].iloc[0]                       # e.g. "240338003/44201"
+site = ds[key]
+site_lat, site_lon = site.location
 
-df_site = df_roi[
-    (df_roi["State Code"]  == state) &
-    (df_roi["County Code"] == county) &
-    (df_roi["Site Num"]    == site)
-].copy()
-
-site_lat = float(df_site["Latitude"].iloc[0])
-site_lon = float(df_site["Longitude"].iloc[0])
-
-# Build UTC datetime index and convert ppm → ppb
-df_site["UTC"] = pd.to_datetime(df_site["Date GMT"] + " " + df_site["Time GMT"], utc=True)
-df_site.set_index("UTC", inplace=True)
-df_site["O3_ppb"] = df_site["Sample Measurement"] * 1000.0
+ozone_ppb = site.convert_units("value", "ppb")       # AQS ozone is ppm; the frame says so in site.units
+ozone_ppb.df["value"].resample("1D").max()
 ```

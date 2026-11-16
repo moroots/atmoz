@@ -3,7 +3,7 @@
 **atmoz** is a Python toolkit for working with ground-based atmospheric datasets: EPA surface air quality
 (AirNow, AQS), NASA TOLNet ozone lidar, and GEOS-CF model output, with common data classes and plotting helpers.
 It is a dev / science tool: it makes the common things fast, and gets out of your way for everything else
-(every download can return plain files or plain DataFrames, every default can be overridden).
+(every download can be fetched as plain files or used as plain pandas DataFrames through `frame.df`, every default can be overridden).
 
 It builds on the earlier [DATAS](https://github.com/moroots/DATAS) package.
 
@@ -24,12 +24,13 @@ See [Installation](installation.md) for every extra.
 | [`atmoz.lidar`](lidar.md) | NASA TOLNet ozone-lidar queries, downloads and curtain plots | `lidar` |
 | [`atmoz.models`](models.md) | NASA GEOS-CF point extractions via OPeNDAP | `models` |
 | `atmoz.data_access` | NASA EarthData login helper | `nasa` |
-| `atmoz.dataclasses` | `AtmoFrame` / `AtmoDataset` containers | core |
+| `atmoz.dataclasses` | `AtmozFrame` / `AtmozDataset` containers, returned by every `download()`; `atmoz.collocate` ([Collocation](collocation.md)) | core |
 
 ## Good to know
 
 * **Credentials**: no keyring and no prompts. See [Configuration](configuration.md).
 * **Caching**: downloads land in `~/.atmoz/cache`. See [Caching](caching.md).
+* **One data shape**: every `download()` returns an `AtmozDataset` of `AtmozFrame`s: UTC time index, `lat` / `lon` / `alt` columns, units in `frame.units`. See [Conventions](conventions.md).
 * **All-or-nothing downloads**: a failed request raises `DownloadError`; you never get a silently partial dataset.
 
 ## Project

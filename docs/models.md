@@ -17,14 +17,15 @@ Install the extra first: `pip install "atmoz[models]"`.
 ```python
 from atmoz.models import GEOS_CF
 
-# Surface air quality at a site -> an atmoz_dataset (cached on disk, all-or-nothing)
+# Surface air quality at a site -> an AtmozDataset, one frame per variable (cached on disk, all-or-nothing)
 ds = GEOS_CF.download(39.055, -76.878, "2025-01-01", "2025-01-31", variables=["o3"])
-o3 = ds.data["aqc_assim"]["o3"]              # pandas Series, UTC time index, ppbv
-print(f"O3 range: {o3.min():.1f} - {o3.max():.1f} ppbv")
+o3 = ds["o3"]                                # an AtmozFrame: UTC time index; value, lat, lon
+print(f"O3 range: {o3.df['value'].min():.1f} - {o3.df['value'].max():.1f} {o3.units['value']}")   # ppb
 
-# Chemistry profiles: one time x level DataFrame per variable
+# Chemistry profiles: long format, one frame per variable
 prof = GEOS_CF.download(39.055, -76.878, "2025-07-28", "2025-08-01", collection="chm", variables=["o3"])
-prof.data["chm_assim_o3"]                    # index: UTC time, columns: model level
+prof["o3"].df                                # index: UTC time; value, lat, lon, alt (km), lev
+prof["o3"].location                          # the grid cell actually used
 ```
 
 `GEOS_CF.fetch(...)` takes the same request but only fills the cache and returns `{file_name: parquet_path}`.
@@ -45,7 +46,7 @@ Pass the collection name as the `collection` argument to `download()` / `fetch()
 | `met3d` | Meteorology on the same 36 levels as `chm` | `zl` (layer height, m) | 36 model levels | 2020 to present |
 
 Any variable the server has can be requested (`chm` / `chm_sfc` / `met3d` have many more): an unknown name fails the request and lists
-what is available. Pair a `chm` profile with `met3d`'s `zl` to get altitudes for the `lev` columns.
+what is available. `chm` profiles already carry altitudes: the `alt` column comes from `met3d`'s `zl`, which `download()` reads for you.
 
 ### Modes
 
@@ -60,7 +61,7 @@ Only `aqc` has `fcast`; asking for it on another collection raises `ValueError`.
 
 | Variable | Collection | Units | Description |
 |----------|------------|-------|-------------|
-| `o3`, `no2`, `co`, `so2`, `hno3` | aqc, chm, chm_sfc | mol/mol (ppbv by default) | Gas mixing ratios |
+| `o3`, `no2`, `co`, `so2`, `hno3` | aqc, chm, chm_sfc | ppb by default (mol/mol raw) | Gas mixing ratios |
 | `pm25_rh35_gcc` | aqc | µg/m³ | PM2.5 at 35% RH |
 | `t2m`, `u10m`, `v10m`, `q2m`, `zpbl`, `ps` | met | K, m/s, m/s, kg/kg, m, Pa | 2-m temperature, 10-m winds, 2-m humidity, boundary-layer height, surface pressure |
 | `zl` | met3d | m | Mid-layer height of each model level |
@@ -69,21 +70,23 @@ Only `aqc` has `fcast`; asking for it on another collection raises `ValueError`.
 
 ## Result shape and units
 
-`download()` returns an `atmoz_dataset` (`datatype="model"`):
+`download()` returns an `AtmozDataset` (`source="GEOS-CF"`) with **one frame per variable**, keyed by the variable name (`"o3"`):
 
-| Collection | `ds.data` | Each DataFrame |
-|------------|-----------|----------------|
-| `aqc`, `chm_sfc`, `met` (surface) | `{"aqc_assim": DataFrame}` | UTC `time` index, one column per variable |
-| `chm`, `met3d` (profiles) | `{"chm_assim_o3": DataFrame, ...}` | UTC `time` index, one column per model level (`lev`), one frame per variable |
+| Collection | Each `AtmozFrame` |
+|------------|-------------------|
+| `aqc`, `chm_sfc`, `met` (surface) | UTC `time` index; columns `value`, `lat`, `lon` (the grid cell) |
+| `chm`, `met3d` (profiles) | long format: UTC `time` index repeated per level; columns `value`, `lat`, `lon`, `alt` (km above the surface) and `lev` (the model level) |
 
+`frame.units` declares the unit of `value` (and `alt` in km); `frame.metadata` has `variable`, `collection`, `mode`, `lat`, `lon`.
 `ds.metadata` has `lat` / `lon` (the 0.25° grid cell actually used), `lat_requested` / `lon_requested`, `units`, `start`, `end`,
-`collection`, `mode`. Each DataFrame's `.attrs` repeats the grid cell and the units. A profile frame has the same shape the
-TOLNet curtain plot takes (time index, level columns), so it can be plotted next to a lidar curtain.
+`collection`, `mode`, `variables`, `files`, `rows`. A profile frame has the same long shape as a TOLNet frame, so `atmoz.collocate` can
+compare the two (see [Collocation](collocation.md)). `chm` also reads `met3d` for the layer heights, which is why its first request is slower.
 
 **Times** are the middle of each hourly average (`00:30`, `01:30`, ...), UTC.
 
 **Units.** The server gives gas species (`o3`, `no2`, `no`, `co`, `so2`, `hno3`, `nh3`, `hcho`, `ch4`, `isop`, `pan`, `h2o2`) in mol/mol. `download()` converts them to
-**ppbv** by default; pass `units="mol/mol"` for the raw values. Every other variable (PM2.5 in µg/m³, the met variables, other species) is returned as served. `fetch()` files are always raw.
+**ppb** by default (the argument is spelled `units="ppbv"`, and `ppbv` is stored as `ppb`); pass `units="mol/mol"` for the raw values. Every other variable
+(PM2.5 in µg/m³, the met variables, other species) is returned as served. `fetch()` files are always raw.
 
 ---
 
@@ -133,8 +136,7 @@ and `mode` must exist for the collection (`chm` and `met` are `assim` only).
 
 ---
 
-## Changes from the old API
+## Comparing with TOLNet
 
-`GEOS_CF().fetch(...)` (which stored xarray Datasets in `self.data`), `force_download` and `add_altitude_coords` are gone. Use
-`GEOS_CF.download(...)`; convert to xarray yourself with `df.to_xarray()` if you want it. To compare with TOLNet, call
-`GEOS_CF.download(...)` at the instrument's coordinates (`ds.metadata["info"]` of a TOLNet dataset has them).
+Call `GEOS_CF.download(...)` at the instrument's coordinates (`frame.location` of a TOLNet frame) with `collection="chm"`, then
+`atmoz.collocate(tolnet_frame, ds["o3"])`. See [Collocation](collocation.md). For xarray, use `frame.df.to_xarray()`.
