@@ -69,6 +69,8 @@ Work after the 0.1.0 commit (planned as 0.1.1).
 - Curtain theme: DejaVu/Inter-style fonts instead of `Courier New`, figure 11 x 4.4 in instead of 20 x 6, smaller labels.
 
 ### Fixed
+- `EPA_PARAMETERS` was checked against EPA's server for 2024: all 79 parameter/resolution combinations behave as the table says and no listed
+  data file is missing from it.
 - UCN conversion could crash the interpreter (segfault) intermittently: the HDF5 library under netCDF4 is not thread-safe and two workers converted files at once. NetCDF reads are now serialized.
 - `surface.utilities.make_datetime` raised `TypeError` on the datetime `Date` columns the AQS reader returns; it now takes datetime or text dates.
 - `dataframe.convert_units()` and unit-aware arithmetic raised `NameError` (the pint registry was never defined); it is now built lazily and includes ppbv/ppmv/pptv.
@@ -78,8 +80,8 @@ Work after the 0.1.0 commit (planned as 0.1.1).
 - `colorbars.tolnet_ozone` no longer uses the deprecated `set_under` / `set_over`.
 
 ### Known issues
-- AirNow window logic assumes the API returns the `endDate` hour (inclusive); see `AirNowAPI.window_end_inclusive`. Not yet checked with a live key.
-- `EPA_PARAMETERS` (which parameter has which resolutions) has not been re-checked against EPA's current file list.
+- AirNow window logic assumes the API returns the `endDate` hour (inclusive); see `AirNowAPI.window_end_inclusive`. Not yet checked with a live key:
+  run `ATMOZ_AIRNOW_API_KEY=... python tools/verify_airnow_live.py` (3 small requests) to confirm or to get the one-line fix.
 
 ## [0.1.0] - 2026-11-12
 

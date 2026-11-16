@@ -38,7 +38,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.11", cache: pip }
       - run: pip install -e ".[dev]"
-      - run: pytest tests/test_package.py tests/test_aqs.py tests/test_airnow.py tests/test_cache.py tests/test_credentials.py tests/test_urls.py tests/test_units.py tests/test_ucn.py
+      - run: pytest tests/test_package.py tests/test_aqs.py tests/test_airnow.py tests/test_cache.py tests/test_credentials.py tests/test_urls.py tests/test_units.py tests/test_ucn.py tests/test_mda8.py
 
   wheel:
     runs-on: ubuntu-latest
