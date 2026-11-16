@@ -8,8 +8,9 @@
 * **altitude** (profiles): each model profile is interpolated onto the observation altitudes using the model's own ``alt``
   column (which may differ per time, as GEOS-CF layer heights do). Outside the model's altitude range the result is NaN.
 * **units**: the model column is converted to the observation unit when both are declared and differ.
-* Both frames must be profiles (have ``alt``) or both surface series (no ``alt``); to compare a surface site with a model
-  profile, select the model's lowest level first.
+* A surface series can be collocated with a profile: the profile side is first reduced to a surface series (its lowest valid
+  level at each time, or its value interpolated to *alt* km), then the usual time collocation runs on the surface
+  frame's times. Two profiles are collocated level by level; two surface series in time only.
 """
 
 from __future__ import annotations
@@ -31,6 +32,28 @@ def _profile_at(alts: np.ndarray, values: np.ndarray, at: np.ndarray) -> np.ndar
     return np.interp(at, alts[ok][order], values[ok][order], left=np.nan, right=np.nan)
 
 
+def _surface_of(af: AtmozFrame, col: str, alt: Optional[float]) -> AtmozFrame:
+    """A profile frame reduced to a surface series: the lowest valid level per time, or the value interpolated to *alt* km."""
+    altname = af.axes["alt"]
+    parts = []
+    for t, g in af.df.groupby(level=0, sort=True):
+        a, v = g[altname].to_numpy(dtype=float), g[col].to_numpy(dtype=float)
+        if alt is None:
+            ok = np.isfinite(a) & np.isfinite(v)
+            val = v[ok][np.argmin(a[ok])] if ok.any() else np.nan
+        else:
+            val = _profile_at(a, v, np.array([alt]))[0]
+        row = {col: val}
+        for key in ("lat", "lon"):
+            if af.axes[key] is not None:
+                row[af.axes[key]] = g[af.axes[key]].iloc[0]
+        parts.append((t, row))
+    df = pd.DataFrame([r for _, r in parts], index=pd.DatetimeIndex([t for t, _ in parts], name=af.df.index.name))
+    units = {k: v for k, v in af.units.items() if k in df.columns}
+    return AtmozFrame(df, units=units, lat=af.axes["lat"], lon=af.axes["lon"],
+                      metadata={**af.metadata, "reduced_to_surface": "lowest level" if alt is None else f"{alt} km"})
+
+
 def collocate(
     obs: AtmozFrame,
     model: AtmozFrame,
@@ -38,17 +61,22 @@ def collocate(
     obs_col: str = "value",
     model_col: str = "value",
     max_gap: Union[str, pd.Timedelta] = "1h",
+    alt: Optional[float] = None,
 ) -> AtmozFrame:
     """Interpolate *model* onto the times (and altitudes) of *obs*.
 
     Parameters
     ----------
     obs, model:
-        :class:`AtmozFrame` objects, both profiles (an ``alt`` axis) or both surface series.
+        :class:`AtmozFrame` objects: profiles (an ``alt`` axis), surface series, or one of each (the profile is reduced
+        to a surface series first, see *alt*).
     obs_col, model_col:
         The columns to compare.
     max_gap:
         Largest distance to the nearest model time (on either side) that still gives a value.
+    alt:
+        Only for a surface-vs-profile comparison: the altitude (km) at which the profile side is evaluated. Default is its
+        lowest valid level at each time.
 
     Returns
     -------
@@ -59,12 +87,14 @@ def collocate(
     for name, af in (("obs", obs), ("model", model)):
         if not isinstance(af, AtmozFrame):
             raise TypeError(f"{name} must be an AtmozFrame, got {type(af).__name__}.")
-    if (obs.axes["alt"] is None) != (model.axes["alt"] is None):
-        raise ValueError("Both frames must have an altitude axis (profiles) or neither (surface series). "
-                         "To compare a surface site with a model profile, select the model's lowest level first.")
     for af, col in ((obs, obs_col), (model, model_col)):
         if col not in af.df.columns:
             raise KeyError(f"Column {col!r} is not in the frame (columns: {list(af.df.columns)}).")
+    if (obs.axes["alt"] is None) != (model.axes["alt"] is None):
+        if obs.axes["alt"] is not None:
+            obs = _surface_of(obs, obs_col, alt)
+        else:
+            model = _surface_of(model, model_col, alt)
     gap = pd.Timedelta(max_gap)
     profiles = obs.axes["alt"] is not None
 

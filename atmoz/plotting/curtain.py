@@ -6,28 +6,43 @@ from typing import Mapping, Optional, Union
 
 import pandas as pd
 
+from atmoz.dataclasses.AtmozFrame import AtmozFrame
 from atmoz.plotting.core import styled
 from atmoz.resources import colorbars, plot_utilities
 
 # variable -> label, colour scale (cmap, norm) and a short title. Add an entry to teach `curtain` a new variable.
 _VARIABLES = {
     "ozone": {
-        "label": "Ozone mixing ratio (ppbv)",
+        "label": "Ozone mixing ratio (ppb)",
         "scale": colorbars.tolnet_ozone,
         "title": "Ozone mixing ratio profile",
     },
 }
 
 
+def _wide(frame: AtmozFrame) -> pd.DataFrame:
+    """A long profile AtmozFrame (``alt`` and ``value`` columns, time index) -> time index x altitude columns."""
+    if frame.axes["alt"] is None or "value" not in frame.df.columns:
+        raise ValueError("curtain needs a profile AtmozFrame with an alt axis and a 'value' column.")
+    tmp = pd.DataFrame({"t": frame.df.index, "alt": frame.df[frame.axes["alt"]].to_numpy(),
+                        "value": frame.df["value"].to_numpy()})
+    wide = tmp.pivot_table(index="t", columns="alt", values="value", aggfunc="mean")
+    wide.index.name = None
+    wide.columns.name = None
+    return wide
+
+
 def _frames(data) -> list[pd.DataFrame]:
-    """One DataFrame (time index, altitude columns) or a dict of them (e.g. ``TOLNET.data[key]``)."""
+    """One profile (AtmozFrame, or a wide DataFrame: time index, altitude columns) or a dict of them."""
+    if isinstance(data, AtmozFrame):
+        return [_wide(data)]
     if isinstance(data, pd.DataFrame):
         return [data]
     if isinstance(data, Mapping):
-        frames = [v for _, v in sorted(data.items(), key=lambda kv: str(kv[0]))]
+        frames = [_wide(v) if isinstance(v, AtmozFrame) else v for _, v in sorted(data.items(), key=lambda kv: str(kv[0]))]
         if all(isinstance(f, pd.DataFrame) for f in frames):
             return frames
-    raise TypeError("curtain needs a DataFrame (time index, altitude columns) or a dict of such DataFrames")
+    raise TypeError("curtain needs an AtmozFrame, a DataFrame (time index, altitude columns) or a dict of them")
 
 
 @styled("curtain")
@@ -50,7 +65,7 @@ def curtain(
     Parameters
     ----------
     data : DataFrame or dict of DataFrames
-        Index = time, columns = altitude, values = the quantity. A dict (e.g. ``TOLNET.data[key]``) plots each
+        Index = time, columns = altitude, values = the quantity. A long profile :class:`~atmoz.AtmozFrame` is pivoted for you. A dict plots each
         frame side by side, in key order.
     variable : {"ozone", None}
         Picks colour scale and labels. ``None`` uses viridis with automatic limits.

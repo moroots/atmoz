@@ -44,7 +44,7 @@ What `collocate` does:
 * **Altitude.** Each model profile is interpolated onto the observation's altitudes using the model's own `alt` column, which differs per time
   for GEOS-CF (layer heights change). Outside the model's altitude range the result is NaN.
 * **Units.** The model column is converted to the observation unit when both are declared and differ (for example ppm to ppb).
-* **Kinds.** Both frames must have an `alt` axis or neither. For a surface site against a model profile, select the model's lowest level first.
+* **Kinds.** Profile against profile is level by level; surface against surface in time only. Surface against profile is allowed too: the profile side is reduced to its lowest valid level at each time, or to `alt=` (km), and the result is a surface-style frame on the surface frame's times (`metadata["obs"|"model"]["reduced_to_surface"]` says which side was reduced).
 
 Check that both altitudes use the same reference before reading the difference: GEOS-CF's `alt` is the layer height above the surface, and the lidar
 altitude is whatever the TOLNet file reports (it may be above sea level).

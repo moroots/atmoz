@@ -65,13 +65,30 @@ def test_surface_series():
     assert np.allclose(out.df["model"], [5.0, 15.0]) and np.allclose(out.df["obs"], [1.0, 2.0])
 
 
-def test_mixed_kinds_and_bad_input_raise():
+def test_bad_input_raises():
     idx = pd.date_range("2024-07-01", periods=2, freq="1h", tz="UTC")
     surface = AtmozFrame(pd.DataFrame({"value": [1.0, 2.0]}, index=idx))
-    prof = profile_frame(idx, [0.0, 1.0], lambda t, a: a)
-    with pytest.raises(ValueError, match="altitude axis"):
-        atmoz.collocate(surface, prof)
     with pytest.raises(TypeError):
         atmoz.collocate(surface.df, surface)
     with pytest.raises(KeyError):
         atmoz.collocate(surface, surface, obs_col="nope")
+
+
+def test_surface_obs_with_model_profile_uses_lowest_level_or_alt():
+    idx = pd.DatetimeIndex(["2024-07-01 00:00", "2024-07-01 01:00"], tz="UTC", name="time")
+    model = profile_frame(idx, [0.1, 1.0, 2.0], lambda t, a: 10 * a)       # 1, 10, 20 at each time
+    obs = AtmozFrame(pd.DataFrame({"value": [5.0, 6.0]}, index=idx), units={"value": "ppb"})
+    low = atmoz.collocate(obs, model)
+    assert np.allclose(low.df["model"], [1.0, 1.0]) and low.axes["alt"] is None
+    assert low.metadata["model"]["reduced_to_surface"] == "lowest level"
+    at = atmoz.collocate(obs, model, alt=1.5)
+    assert np.allclose(at.df["model"], [15.0, 15.0])
+
+
+def test_profile_obs_with_surface_model_is_reduced_to_the_obs_surface():
+    idx = pd.DatetimeIndex(["2024-07-01 00:00", "2024-07-01 01:00"], tz="UTC", name="time")
+    obs = profile_frame(idx, [0.2, 1.0], lambda t, a: 100 * a)             # lowest level: 20
+    model = AtmozFrame(pd.DataFrame({"value": [1.0, 3.0]}, index=idx), units={"value": "ppb"})
+    out = atmoz.collocate(obs, model)
+    assert np.allclose(out.df["obs"], [20.0, 20.0]) and np.allclose(out.df["model"], [1.0, 3.0])
+    assert out.metadata["obs"]["reduced_to_surface"] == "lowest level"

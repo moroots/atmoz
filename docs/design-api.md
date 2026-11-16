@@ -1,6 +1,6 @@
 # API design: AtmozFrame / AtmozDataset (agreed decisions)
 
-Status: agreed, not yet implemented. This is the brief for the migration; implementation work follows it.
+Status: implemented. This is the design brief the migration followed.
 
 ## Containers
 
@@ -31,9 +31,9 @@ Cache the raw file as parquet. Filters apply to the cached parquet before the pe
 
 ## After the migration
 
-1. `collocate(lidar_frame, model_frame)`: align TOLNet and GEOS-CF in time and altitude.
-2. Units/site helper: returns lat, lon and units from any dataset. Convention doc.
-3. Docs and a quickstart; one example notebook; demo helpers only if time.
+1. `atmoz.collocate(obs, model)`: align a model to observations in time and altitude (surface against profile allowed). Done.
+2. `AtmozDataset.inventory()` / `AtmozFrame.location`: lat, lon and units from any dataset, plus the conventions doc. Done.
+3. Docs and a quickstart: done. An example notebook and demo helpers remain.
 
 ## Out of scope for now
 

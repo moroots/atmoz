@@ -138,7 +138,7 @@ observation and returns an `AtmozFrame` with `obs` and `model` columns (plus `al
 * **Altitude** (profiles): each model profile is interpolated onto the observation altitudes with the model's own `alt` column, which may differ
   per time (GEOS-CF layer heights do). Outside the model's altitude range the result is NaN.
 * **Units**: the model column is converted to the observation unit when both are declared and differ.
-* Both frames must be profiles (have `alt`) or both surface series; to compare a surface site with a model profile, select the model's lowest level first.
+* Profile against profile is level by level; surface against surface in time only. A surface series against a profile is allowed: the profile side is first reduced to its lowest valid level at each time (or to the altitude given as `alt=` in km).
 * `result.metadata` keeps both inputs' metadata, `max_gap` and the columns used.
 
 See [Collocation](collocation.md) for a TOLNet versus GEOS-CF example.

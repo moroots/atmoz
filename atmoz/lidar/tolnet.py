@@ -486,21 +486,6 @@ class TOLNET:
 
     # ---- plotting (one implementation: atmoz.plotting.curtain) --------------------------------------------------
     @staticmethod
-    def _curtain_input(data):
-        """A long ``AtmozFrame`` (or a dict of them) -> the time x altitude DataFrame(s) ``curtain`` plots."""
-        if isinstance(data, AtmozFrame):
-            df = data.df
-            alt = df[data.axes["alt"]].to_numpy()
-            tmp = pd.DataFrame({"t": df.index, "alt": alt, "value": df["value"].to_numpy()})
-            wide = tmp.pivot(index="t", columns="alt", values="value")
-            wide.index.name = None
-            wide.columns.name = None
-            return wide
-        if isinstance(data, dict):
-            return {k: TOLNET._curtain_input(v) for k, v in data.items()}
-        return data
-
-    @staticmethod
     def plot_curtain(data, **kwargs):
         """Ozone curtain of one frame or a ``{date: frame}`` dict. Returns ``(fig, ax)``.
 
@@ -511,7 +496,7 @@ class TOLNET:
         from atmoz.plotting.curtain import curtain
         show = kwargs.pop("show", False)
         kwargs.setdefault("watermark", get_asset("Watermark_TOLNet.png"))
-        fig, ax = curtain(TOLNET._curtain_input(data), **kwargs)
+        fig, ax = curtain(data, **kwargs)
         if show:
             import matplotlib.pyplot as plt
             plt.show()

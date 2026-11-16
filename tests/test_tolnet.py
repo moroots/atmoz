@@ -133,7 +133,8 @@ def test_plot_curtain_and_plot_curtains(fake_http):
     fig, ax = TOLNET.plot_curtain(group)
     assert ax.get_title("left") and len(fig.axes) >= 2    # curtain + colorbar (+ watermark)
     fig1, _ = TOLNET.plot_curtain(ds["tolnet_2025-07-28.json"])          # one long frame is pivoted to time x altitude
-    wide = TOLNET._curtain_input(ds["tolnet_2025-07-28.json"])
+    from atmoz.plotting.curtain import _wide
+    wide = _wide(ds["tolnet_2025-07-28.json"])
     assert wide.shape == (2, 3) and wide.columns.tolist() == ALT and wide.iloc[0].tolist() == [10.0, 20.0, 30.0]
     figs = TOLNET.plot_curtains(ds)
     assert len(figs) == 1

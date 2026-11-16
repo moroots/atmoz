@@ -14,7 +14,7 @@ from atmoz.resources import plot_utilities
 def profile(
     profiles: Mapping[str, Mapping],
     *,
-    xlabel: str = "Ozone mixing ratio (ppbv)",
+    xlabel: str = "Ozone mixing ratio (ppb)",
     ylim: Optional[tuple] = (0, 5),
     title: Optional[str] = None,
     ax=None,

@@ -200,3 +200,18 @@ def test_inter_is_bundled_and_used(curtain_df):
     _, ax = plot.curtain(curtain_df, title="Inter")
     assert ax.title.get_fontname() == "Inter"
     assert ax.yaxis.label.get_fontname() == "Inter"
+
+
+def test_curtain_accepts_a_long_atmoz_frame():
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    from atmoz import AtmozFrame
+    from atmoz.plotting.curtain import curtain
+    times = pd.date_range("2024-07-01", periods=3, freq="1h", tz="UTC")
+    rows = [(t, a, 10.0 + a) for t in times for a in (0.5, 1.0, 1.5)]
+    df = pd.DataFrame(rows, columns=["time", "alt", "value"]).set_index("time")
+    af = AtmozFrame(df, units={"value": "ppb", "alt": "km"}, alt="alt")
+    fig, ax = curtain(af)
+    fig2, _ = curtain({"day": af})
+    assert fig is not None and fig2 is not None
+    plt.close("all")
