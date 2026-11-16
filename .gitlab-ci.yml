@@ -1,7 +1,7 @@
 # Tests on every supported Python, lint, and a packaging smoke test.
 # Tests never touch the network (HTTP is faked), so this is fast and deterministic.
 
-stages: [test, build]
+stages: [test, build, deploy]
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
@@ -50,3 +50,24 @@ wheel:
   artifacts:
     paths: [dist/]
     expire_in: 1 week
+
+# Documentation: built on every pipeline (strict, so broken links fail), published to GitLab Pages from main only.
+docs-check:
+  stage: build
+  image: python:3.13
+  script:
+    - pip install -e ".[dev]"
+    - mkdocs build --strict -d site
+  rules:
+    - if: $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+
+pages:
+  stage: deploy
+  image: python:3.13
+  script:
+    - pip install -e ".[dev]"
+    - mkdocs build --strict -d public
+  artifacts:
+    paths: [public]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
