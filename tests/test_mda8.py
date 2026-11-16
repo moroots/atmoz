@@ -133,3 +133,58 @@ def test_mda8_aqs_runs_per_site_on_an_aqs_style_frame():
     day1 = out[out["date"] == "2024-06-01"].set_index("Site Num")
     assert day1["mda8"].to_dict() == pytest.approx({"0001": 0.040, "0002": 0.060})
     assert day1["valid"].all() and list(out.columns[:3]) == ["State Code", "County Code", "Site Num"]
+
+
+def aqs_frame(site="240313001", level=0.050, poc_levels=None, code="44201", unit="ppm"):
+    from atmoz import AtmozFrame
+    t = pd.date_range("2024-06-01", periods=48, freq="h")
+    parts = [pd.DataFrame({"time": t.tz_localize("UTC") + pd.Timedelta(hours=5), "value": v, "poc": p + 1,
+                           "local_time": t, "lat": 39.0, "lon": -77.0})
+             for p, v in enumerate(poc_levels or (level,))]
+    rows = pd.concat(parts).set_index("time").sort_index(kind="stable")
+    meta = {"site_id": site, "state_code": site[:2], "county_code": site[2:5], "site_num": site[5:], "parameter_code": code}
+    return AtmozFrame(rows, units={"value": unit}, lat="lat", lon="lon", metadata=meta)
+
+
+def test_mda8_aqs_accepts_a_dataset_and_matches_the_raw_frame_result():
+    from atmoz import AtmozDataset
+    ds = AtmozDataset(name="aqs", source="EPA AQS", frames={
+        "240313001/44201": aqs_frame("240313001", 0.040), "240313002/44201": aqs_frame("240313002", 0.060),
+        "240313002/42101": aqs_frame("240313002", 9.0, code="42101")})  # another parameter is skipped
+    out = mda8_aqs(ds)
+    day1 = out[out["date"] == "2024-06-01"].set_index("Site Num")
+    assert day1["mda8"].to_dict() == pytest.approx({"3001": 0.040, "3002": 0.060})
+    assert list(out.columns) == ["State Code", "County Code", "Site Num", "date", "mda8", "n_averages", "valid", "start_hour"]
+    assert set(out["State Code"]) == {"24"} and set(out["County Code"]) == {"031"} and day1["valid"].all()
+    hours_ = pd.date_range("2024-06-01", periods=48, freq="h")
+    raw = pd.DataFrame({"State Code": "24", "County Code": "031", "Site Num": "3001", "POC": 1,
+                        "Date Local": hours_.normalize(), "Time Local": hours_.strftime("%H:%M"),
+                        "Sample Measurement": 0.040})
+    pd.testing.assert_frame_equal(mda8_aqs(ds.select("240313001/*")), mda8_aqs(raw))
+
+
+def test_mda8_aqs_takes_one_frame_and_combines_its_pocs():
+    out = mda8_aqs(aqs_frame(poc_levels=(0.040, 0.090)))        # POC 1 is primary: POC 2 only fills gaps
+    assert out.loc[out["date"] == "2024-06-01", "mda8"].item() == pytest.approx(0.040)
+    assert (out["Site Num"] == "3001").all()
+
+
+def test_mda8_aqs_uses_the_frame_units_and_site_from_the_key():
+    from atmoz import AtmozDataset
+    af = aqs_frame(level=50.0, unit="ppb")
+    af.metadata.clear()                                              # no site metadata: fall back to the key
+    ds = AtmozDataset(name="aqs", source="EPA AQS", frames={"240313001/44201": af})
+    out = mda8_aqs(ds)
+    assert out.loc[out["date"] == "2024-06-01", "mda8"].item() == 50.0 and out["Site Num"].iloc[0] == "3001"
+    with pytest.raises(ValueError, match="which AQS site"):
+        mda8_aqs(AtmozDataset(name="x", source="x", frames={"somewhere": af}))
+
+
+def test_mda8_aqs_dataset_without_ozone_is_empty_and_needs_local_time():
+    from atmoz import AtmozDataset, AtmozFrame
+    ds = AtmozDataset(name="aqs", source="EPA AQS", frames={"240313001/42101": aqs_frame(code="42101")})
+    assert mda8_aqs(ds).empty
+    af = aqs_frame()
+    bad = AtmozFrame(af.df.drop(columns="local_time"), units=af.units, metadata=af.metadata)
+    with pytest.raises(ValueError, match="local_time"):
+        mda8_aqs(bad)
