@@ -15,7 +15,7 @@ Everything is computed in whole ppb so that truncation is exact (0.070 ppm = 70 
 
 >>> mda8(hourly_ppb_series)                                   # naive index = already local standard time
 >>> mda8(hourly_ppb_series_utc, utc_offset=-5)                # UTC index at a site in EST
->>> mda8_aqs(ds.data["hourly_44201_2024.csv"])                # EPA AQS hourly file, every site at once
+>>> mda8_aqs(EPA_PreGen.download("ozone", "hourly", 2024))   # EPA AQS download (or a raw hourly DataFrame), every site
 """
 
 from __future__ import annotations
@@ -25,7 +25,10 @@ from typing import Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 
+from atmoz.dataclasses import AtmozDataset, AtmozFrame
+
 LEVEL_PPB = 70.0          # the NAAQS level, 0.070 ppm [4(a)]
+OZONE_CODE = "44201"       # AQS parameter code of ozone
 SUM_THRESHOLD_PPB = 567.0  # 3(b): with <= 5 hours, valid if the sum of available hours exceeds 0.567 ppm
 _EPS = 1e-9
 
@@ -173,41 +176,84 @@ def combine_collocated(df: pd.DataFrame, *, poc: str = "POC", time: str, value: 
     return lead.where(lead.notna(), others.mean(axis=1))
 
 
+
+def _site_result(work: pd.DataFrame, key: tuple, *, site: Sequence[str], poc: Optional[str], value: str, units: str,
+                 primary: Optional[dict], level_ppb: float) -> pd.DataFrame:
+    """MDA8 of one site: *work* has ``_time`` (local standard time), *value* and optionally the *poc* column."""
+    series = (combine_collocated(work, poc=poc, time="_time", value=value, primary=(primary or {}).get(key))
+              if poc and poc in work else work.set_index("_time")[value])
+    res = mda8(series, units=units, level_ppb=level_ppb).reset_index()
+    for col, val in zip(site, key):
+        res[col] = val
+    return res
+
+
+def _frame_sites(data: Union[AtmozFrame, AtmozDataset]):
+    """``(site tuple, frame)`` for every ozone frame of an AQS download; site ids come from the metadata or the key."""
+    items = data.items() if isinstance(data, AtmozDataset) else [(data.metadata.get("site_id", ""), data)]
+    for key, frame in items:
+        code = frame.metadata.get("parameter_code", OZONE_CODE)
+        if str(code) != OZONE_CODE:
+            continue
+        meta, ident = frame.metadata, str(key).split("/")[0]
+        if all(k in meta for k in ("state_code", "county_code", "site_num")):
+            yield (meta["state_code"], meta["county_code"], meta["site_num"]), frame
+        elif len(ident) == 9 and ident.isdigit():
+            yield (ident[:2], ident[2:5], ident[5:]), frame
+        else:
+            raise ValueError(f"Cannot tell which AQS site {key!r} is: expected an AQS download (key '240230002/44201').")
+
+
 def mda8_aqs(
-    df: pd.DataFrame,
+    df: Union[pd.DataFrame, AtmozFrame, AtmozDataset],
     *,
     value: str = "Sample Measurement",
     date: str = "Date Local",
     hour: str = "Time Local",
     site: Sequence[str] = ("State Code", "County Code", "Site Num"),
     poc: Optional[str] = "POC",
-    units: str = "ppm",
+    units: Optional[str] = None,
     primary: Optional[dict] = None,
     level_ppb: float = LEVEL_PPB,
 ) -> pd.DataFrame:
-    """MDA8 for every site of an EPA AQS hourly ozone file (``EPA_PreGen`` output, parameter 44201).
+    """MDA8 for every site of EPA AQS hourly ozone (parameter 44201).
 
-    ``Date Local`` / ``Time Local`` are local standard time, hour-beginning, as the rules need. Collocated monitors (POCs) at
-    a site are combined per EPA 2(b) (see :func:`combine_collocated`). *primary* optionally maps a site tuple to its
-    primary POC, e.g. ``{("24", "031", "3001"): 1}``.
+    *df* is either a raw AQS hourly DataFrame (``read_aqs_zip`` output) or what ``EPA_PreGen.download()`` returns (an
+    ``AtmozDataset``, or one ``AtmozFrame`` from it). For raw frames ``Date Local`` / ``Time Local`` are local standard
+    time, hour-beginning, as the rules need, and *value*, *date*, *hour*, *site*, *poc* name the columns. For datasets
+    the ``local_time``, ``poc`` and ``value`` columns are used (those arguments are ignored) and frames of other
+    parameters are skipped. Collocated monitors (POCs) at a site are combined per EPA 2(b) (see
+    :func:`combine_collocated`). *primary* optionally maps a site tuple to its primary POC, e.g.
+    ``{("24", "031", "3001"): 1}``.
 
-    Returns a DataFrame with the *site* columns followed by the columns of :func:`mda8` (``date``, ``mda8`` in *units*,
+    *units* are those of the values: ``"ppm"`` for raw AQS frames by default, and for datasets each frame's own
+    ``units["value"]``. The MDA8 comes back in the same unit.
+
+    Returns a DataFrame with the *site* columns followed by the columns of :func:`mda8` (``date``, ``mda8``,
     ``n_averages``, ``valid``, ``start_hour``), one row per site and day.
     """
-    day = df[date] if pd.api.types.is_datetime64_any_dtype(df[date]) else pd.to_datetime(df[date].astype(str).str.strip())
-    clock = pd.to_datetime(df[hour].astype(str).str.strip(), format="%H:%M")
-    stamp = day.dt.normalize() + (clock - clock.dt.normalize())
-    work = df[list(site) + ([poc] if poc and poc in df else []) + [value]].copy()
-    work["_time"] = stamp
     rows = []
-    for key, grp in work.groupby(list(site), observed=True, sort=True):
-        key = key if isinstance(key, tuple) else (key,)
-        series = (combine_collocated(grp, poc=poc, time="_time", value=value, primary=(primary or {}).get(key))
-                  if poc and poc in grp else grp.set_index("_time")[value])
-        res = mda8(series, units=units, level_ppb=level_ppb).reset_index()
-        for col, val in zip(site, key):
-            res[col] = val
-        rows.append(res)
+    if isinstance(df, (AtmozFrame, AtmozDataset)):
+        site = ("State Code", "County Code", "Site Num")
+        for key, frame in sorted(_frame_sites(df), key=lambda item: item[0]):
+            if "local_time" not in frame.df:
+                raise ValueError("MDA8 needs the 'local_time' column (local standard time) of the AQS frame.")
+            work = pd.DataFrame({"_time": frame.df["local_time"].to_numpy(), "value": frame.df["value"].to_numpy()})
+            if "poc" in frame.df:
+                work["POC"] = frame.df["poc"].to_numpy()
+            rows.append(_site_result(work, key, site=site, poc="POC", value="value",
+                                     units=units or frame.units.get("value", "ppm"), primary=primary, level_ppb=level_ppb))
+    else:
+        day = df[date] if pd.api.types.is_datetime64_any_dtype(df[date]) else pd.to_datetime(df[date].astype(str).str.strip())
+        clock = pd.to_datetime(df[hour].astype(str).str.strip(), format="%H:%M")
+        stamp = day.dt.normalize() + (clock - clock.dt.normalize())
+        work = df[list(site) + ([poc] if poc and poc in df else []) + [value]].copy()
+        work["_time"] = stamp
+        for key, grp in work.groupby(list(site), observed=True, sort=True):
+            key = key if isinstance(key, tuple) else (key,)
+            rows.append(_site_result(grp, key, site=site, poc=poc, value=value, units=units or "ppm", primary=primary,
+                                     level_ppb=level_ppb))
+    cols = [*site, "date", "mda8", "n_averages", "valid", "start_hour"]
     if not rows:
-        return pd.DataFrame(columns=[*site, "date", "mda8", "n_averages", "valid", "start_hour"])
-    return pd.concat(rows, ignore_index=True)[[*site, "date", "mda8", "n_averages", "valid", "start_hour"]]
+        return pd.DataFrame(columns=cols)
+    return pd.concat(rows, ignore_index=True)[cols]

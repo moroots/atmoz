@@ -7,25 +7,31 @@ EPA AQS pre-generated files: https://aqs.epa.gov/aqsweb/airdata/
 * :class:`EPA_PreGen` follows the package-wide process (see ``docs/conventions.md``):
   ``_validate -> _url -> _fetch_one -> _parse_one -> _assemble``, with ``download()`` and ``fetch()``
   as the public entry points.
+* Each zip is parsed once and cached beside it as parquet; ``download()`` filters that parquet, not the network.
 """
 from __future__ import annotations
 
 import csv
 import difflib
+import os
 import shutil
 import tempfile
+import threading
 import warnings
 import zipfile
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.csv as pacsv
+import pyarrow.dataset as pads
+import pyarrow.parquet as pq
 
-from atmoz.resources.atmoz_dataclasses import atmoz_dataset
+from atmoz.dataclasses import AtmozDataset, AtmozFrame
 from atmoz.resources.cache import cache_dir as _cache_root
 from atmoz.resources.cache import download_to_cache
 from atmoz.resources.sessionHandler import SessionHandler
@@ -207,6 +213,187 @@ def read_aqs_zip(path: PathLike, member: Optional[str] = None, *,
     return df
 
 
+# ---------------------------------------------------------------------------
+# Filters (applied to the cached parquet) and the per-site/parameter frames.
+# ---------------------------------------------------------------------------
+_UNITS = {
+    "Parts per million": "ppm", "Parts per billion": "ppb", "Parts per trillion": "ppt",
+    "Micrograms/cubic meter (LC)": "µg/m3", "Micrograms/cubic meter (25 C)": "µg/m3",
+    "Degrees Celsius": "°C", "Millibars": "mbar", "Percent relative humidity": "%",
+    "Knots": "kn", "Meters/second": "m/s",
+}
+
+_FRAME_COLUMNS = {"Sample Measurement": "value", "Latitude": "lat", "Longitude": "lon", "POC": "poc", "MDL": "mdl",
+                  "Qualifier": "qualifier", "Method Type": "method_type", "Method Code": "method_code"}
+_TEXT_COLUMNS = ("qualifier", "method_type", "method_code")
+_KEY_COLUMNS = ["State Code", "County Code", "Site Num", "Parameter Code"]
+_NEEDED = {*_KEY_COLUMNS, *_FRAME_COLUMNS, "Date GMT", "Time GMT", "Date Local", "Time Local", "Units of Measure",
+           "Parameter Name", "State Name", "County Name", "Datum"}
+
+
+def _norm_unit(raw: Any) -> Optional[str]:
+    return None if raw is None or pd.isna(raw) else _UNITS.get(str(raw), str(raw))
+
+
+def _many(value: Any) -> list:
+    """A filter value as a list: ``None`` -> ``[]``, a scalar -> ``[scalar]``."""
+    return [] if value is None else as_list(value)
+
+
+def _site_id(site: Any) -> Tuple[str, str, str]:
+    """``"240230002"`` / ``"840240230002"`` / ``("24", "023", "0002")`` -> zero-padded ``(state, county, site)``."""
+    if isinstance(site, tuple):
+        parts = [str(p).strip() for p in site]
+        if len(parts) != 3 or not all(p.isdigit() for p in parts):
+            raise ValueError(f"site {site!r}: give an AQS id such as '240230002' or digits (state, county, site).")
+        return parts[0].zfill(2), parts[1].zfill(3), parts[2].zfill(4)
+    text = str(site).strip()
+    if len(text) == 12 and text.startswith("840"):
+        text = text[3:]
+    if len(text) != 9 or not text.isdigit():
+        raise ValueError(f"site {site!r}: an AQS site id is 9 digits (state 2, county 3, site 4), e.g. '240230002'.")
+    return text[:2], text[2:5], text[5:]
+
+
+def _isin(col: pd.Series, values: Iterable[Any], *, lower: bool = False) -> pd.Series:
+    """Rows of *col* equal to one of *values* (text as text, numbers as numbers, dates as dates)."""
+    vals = list(values)
+    if pd.api.types.is_datetime64_any_dtype(col):
+        return col.isin(pd.to_datetime(vals))
+    if pd.api.types.is_numeric_dtype(col):
+        return col.isin(pd.to_numeric(vals, errors="coerce"))
+    text = [str(v).lower() if lower else str(v) for v in vals]
+    if isinstance(col.dtype, pd.CategoricalDtype):
+        cats = pd.Index(col.cat.categories.astype(str))
+        return col.isin(col.cat.categories[(cats.str.lower() if lower else cats).isin(text)])
+    return (col.astype(str).str.lower() if lower else col.astype(str)).isin(text)
+
+
+@dataclass
+class _Filters:
+    """The normalised ``download()`` filters; ``None`` / empty means "no filter"."""
+
+    bbox: Optional[BBox] = None
+    start_date: Optional[pd.Timestamp] = None
+    end_date: Optional[pd.Timestamp] = None
+    site: List[Tuple[str, str, str]] = field(default_factory=list)
+    state: List[str] = field(default_factory=list)
+    county: List[str] = field(default_factory=list)
+    parameter: List[str] = field(default_factory=list)
+    poc: List[str] = field(default_factory=list)
+    where: Dict[str, List[Any]] = field(default_factory=dict)
+
+    def applied(self) -> Dict[str, Any]:
+        """The filters in use as plain values (``metadata["filters"]``)."""
+        out: Dict[str, Any] = {k: getattr(self, k) for k in ("bbox", "site", "state", "county", "parameter", "poc", "where")
+                               if getattr(self, k)}
+        for key in ("start_date", "end_date"):
+            if getattr(self, key) is not None:
+                out[key] = getattr(self, key).date().isoformat()
+        return out
+
+    def columns(self) -> set:
+        """File columns the filters need."""
+        need = set(self.where)
+        if self.bbox:
+            need |= {"Latitude", "Longitude"}
+        if self.start_date is not None or self.end_date is not None:
+            need.add("Date Local")
+        for values, cols in ((self.site, _KEY_COLUMNS[:3]), (self.state, ["State Code", "State Name"]),
+                             (self.county, ["County Code", "County Name"]), (self.parameter, ["Parameter Code"]),
+                             (self.poc, ["POC"])):
+            if values:
+                need.update(cols)
+        return need
+
+    def expression(self, schema: pa.Schema) -> Optional[pads.Expression]:
+        """Pyarrow predicate for the bbox and date filters (evaluated while reading the parquet)."""
+        parts = []
+        if self.bbox is not None:
+            west, south, east, north = self.bbox
+            lon, lat = pads.field("Longitude"), pads.field("Latitude")
+            parts += [lon >= west, lon <= east, lat >= south, lat <= north]
+        if self.start_date is not None or self.end_date is not None:
+            kind, day = schema.field("Date Local").type, pads.field("Date Local")
+            if self.start_date is not None:
+                parts.append(day >= pa.scalar(self.start_date.to_pydatetime(), type=kind))
+            if self.end_date is not None:
+                parts.append(day <= pa.scalar(self.end_date.to_pydatetime(), type=kind))
+        expr = None
+        for part in parts:
+            expr = part if expr is None else expr & part
+        return expr
+
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Pandas predicates for the code, name and free-column filters."""
+        mask = pd.Series(True, index=df.index)
+        if self.site:
+            hit = pd.Series(False, index=df.index)
+            for state, county, num in self.site:
+                hit |= _isin(df["State Code"], [state]) & _isin(df["County Code"], [county]) & _isin(df["Site Num"], [num])
+            mask &= hit
+        for values, code_col, name_col in ((self.state, "State Code", "State Name"),
+                                           (self.county, "County Code", "County Name")):
+            if values:
+                codes = [v for v in values if v.isdigit()]
+                names = [v for v in values if not v.isdigit()]
+                hit = _isin(df[code_col], codes) if codes else pd.Series(False, index=df.index)
+                if names:
+                    hit = hit | _isin(df[name_col], names, lower=True)
+                mask &= hit
+        if self.parameter:
+            mask &= _isin(df["Parameter Code"], self.parameter)
+        if self.poc:
+            mask &= _isin(df["POC"], self.poc)
+        for column, values in self.where.items():
+            mask &= _isin(df[column], values)
+        return df[mask]
+
+
+def _frames_from_aqs(df: pd.DataFrame, name: str) -> Dict[str, AtmozFrame]:
+    """Split hourly AQS rows into one frame per site and parameter, keyed ``"{state}{county}{site}/{parameter code}"``."""
+    needed = ["Sample Measurement", "Latitude", "Longitude", "Date GMT", "Time GMT", *_KEY_COLUMNS]
+    missing = [c for c in needed if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"{name}: cannot build time series, the file lacks {missing}. Frames need UTC time (Date GMT + Time GMT); local "
+            "standard time cannot be converted without the site's UTC offset. Use fetch() and read_aqs_zip() for such files.")
+    if df.empty:
+        return {}
+    clock = pd.to_datetime(df["Time GMT"].astype(str).str.strip(), format="%H:%M")
+    stamp = pd.to_datetime(df["Date GMT"]).dt.normalize() + (clock - clock.dt.normalize())
+    work = df.assign(time=stamp.dt.tz_localize("UTC")).dropna(subset=["time"])
+    if "Date Local" in work and "Time Local" in work:
+        local = pd.to_datetime(work["Time Local"].astype(str).str.strip(), format="%H:%M")
+        work["local_time"] = pd.to_datetime(work["Date Local"]).dt.normalize() + (local - local.dt.normalize())
+    frames: Dict[str, AtmozFrame] = {}
+    for (state, county, num, code), grp in work.groupby(_KEY_COLUMNS, observed=True, sort=True):
+        out = grp.rename(columns=_FRAME_COLUMNS)
+        keep = [c for c in ("value", "lat", "lon", "poc", "local_time", "mdl", *_TEXT_COLUMNS) if c in out.columns]
+        out = out[["time", *keep]].sort_values("time", kind="stable").set_index("time")
+        for col in _TEXT_COLUMNS:
+            if col in out:
+                out[col] = out[col].astype(object)
+        if "poc" in out:
+            out["poc"] = pd.to_numeric(out["poc"]).astype("int64")
+        first = grp.iloc[0]
+        unit = _norm_unit(first.get("Units of Measure"))
+
+        def text(column: str) -> Optional[str]:
+            return None if column not in grp or pd.isna(first[column]) else str(first[column])
+
+        meta = {"site_id": f"{state}{county}{num}", "state_code": str(state), "county_code": str(county),
+                "site_num": str(num), "state_name": text("State Name"), "county_name": text("County Name"),
+                "parameter_code": str(code), "parameter_name": text("Parameter Name"), "datum": text("Datum"),
+                "units_raw": text("Units of Measure"), "lat": float(first["Latitude"]), "lon": float(first["Longitude"]),
+                "pocs": sorted(out["poc"].unique().tolist()) if "poc" in out else []}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)  # units AtmozFrame does not know are kept as the file spells them
+            frames[f"{state}{county}{num}/{code}"] = AtmozFrame(
+                out, units={"value": unit} if unit else None, lat="lat", lon="lon", metadata=meta)
+    return frames
+
+
 class EPA_PreGen:
     """Download and parse the EPA pre-generated AQS files.
 
@@ -318,15 +505,40 @@ class EPA_PreGen:
         return download_to_cache(cls._url(job), dest, (session_handler or default_session_handler()).session(),
                                  max_age=age, refresh=refresh)
 
-    # ---- 4. parse (file on disk -> DataFrame) ----------------------------------
+
+    # ---- 4. parse (file on disk -> parquet cache -> filtered DataFrame) --------------
+    @staticmethod
+    def _ensure_parquet(zip_path: Path, member: str) -> Path:
+        """The parquet copy of *zip_path*, written once (and again only when the zip is newer)."""
+        target = zip_path.with_suffix(".parquet")
+        if target.exists() and target.stat().st_mtime >= zip_path.stat().st_mtime:
+            return target
+        table = pa.Table.from_pandas(read_aqs_zip(zip_path, member), preserve_index=False)
+        part = target.with_name(f"{target.name}.{os.getpid()}-{threading.get_ident()}.part")
+        try:
+            pq.write_table(table, part)
+            os.replace(part, target)
+        finally:
+            part.unlink(missing_ok=True)
+        return target
+
     @classmethod
-    def _parse_one(cls, job: Job, path: Path, *, columns: Optional[Sequence[str]] = None,
-                   bbox: Optional[BBox] = None) -> pd.DataFrame:
-        return read_aqs_zip(path, cls._name(job), columns=columns, bbox=bbox)
+    def _parse_one(cls, job: Job, path: Path, *, filters: Optional[_Filters] = None) -> pd.DataFrame:
+        """Rows of one file that pass *filters*, read from its parquet cache (only the columns that are needed)."""
+        filters = filters or _Filters()
+        name = cls._name(job)
+        parquet = cls._ensure_parquet(path, name)
+        schema = pq.read_schema(parquet)
+        absent = [c for c in sorted(filters.columns()) if c not in schema.names]
+        if absent:
+            raise KeyError(f"{name}: filter columns not in this file: {absent}. Available: {schema.names}")
+        columns = [c for c in schema.names if c in _NEEDED or c in filters.columns()]
+        table = pq.read_table(parquet, columns=columns, filters=filters.expression(schema))
+        return filters.apply(_nulls_to_float(table).to_pandas())
 
     # ---- fetch + parse for one job ---------------------------------------------
     @classmethod
-    def _load_one(cls, job: Job, *, columns=None, bbox=None, use_cache: bool = True, refresh: bool = False,
+    def _load_one(cls, job: Job, *, filters: Optional[_Filters] = None, use_cache: bool = True, refresh: bool = False,
                   max_age: Union[str, timedelta, None] = "auto", cache_dir: Optional[PathLike] = None,
                   session_handler: Optional[SessionHandler] = None) -> pd.DataFrame:
         tmp = None
@@ -338,16 +550,42 @@ class EPA_PreGen:
                 dest_dir = Path(tmp)
             path = cls._fetch_one(job, dest_dir=dest_dir, refresh=refresh or not use_cache,
                                   max_age=max_age, session_handler=session_handler)
-            return cls._parse_one(job, path, columns=columns, bbox=bbox)
+            return cls._parse_one(job, path, filters=filters)
         finally:
             if tmp:
                 shutil.rmtree(tmp, ignore_errors=True)
 
     # ---- 5. assemble -------------------------------------------------------------
     @staticmethod
-    def _assemble(frames: Dict[str, pd.DataFrame]) -> atmoz_dataset:
-        meta = {"endpoint": "aqs", "files": list(frames), "rows": {name: len(df) for name, df in frames.items()}}
-        return atmoz_dataset(data=frames, metadata=meta, datatype="surface")
+    def _assemble(tables: Dict[str, pd.DataFrame], filters: _Filters) -> AtmozDataset:
+        meta = {"endpoint": "aqs", "files": list(tables), "rows": {name: len(df) for name, df in tables.items()},
+                "filters": filters.applied()}
+        name = "EPA AQS " + ", ".join(Path(n).stem for n in tables)
+        rows = [df for df in tables.values() if len(df)]
+        frames = _frames_from_aqs(pd.concat(rows, ignore_index=True), name) if rows else {}
+        return AtmozDataset(name=name, source="EPA AQS", frames=frames, metadata=meta)
+
+    @staticmethod
+    def _filters(bbox, start_date, end_date, site, state, county, parameter, poc, where) -> _Filters:
+        """Validate and normalise the ``download()`` filters (before anything is downloaded)."""
+        sites = [] if site is None else [site] if isinstance(site, (str, int, tuple)) else list(site)
+        start = None if start_date is None else pd.Timestamp(start_date).tz_localize(None).normalize()
+        end = None if end_date is None else pd.Timestamp(end_date).tz_localize(None).normalize()
+        if start is not None and end is not None and start > end:
+            raise ValueError(f"start_date {start.date()} is after end_date {end.date()}.")
+        if bbox is not None:
+            if len(bbox) != 4 or bbox[0] > bbox[2] or bbox[1] > bbox[3]:
+                raise ValueError("bbox must be (west, south, east, north) with west <= east and south <= north.")
+            bbox = tuple(float(v) for v in bbox)
+        codes = [str(p) for p in _many(parameter)]
+        return _Filters(
+            bbox=bbox, start_date=start, end_date=end, site=[_site_id(s) for s in sites],
+            state=[str(s).strip().zfill(2) if str(s).strip().isdigit() else str(s).strip() for s in _many(state)],
+            county=[str(c).strip().zfill(3) if str(c).strip().isdigit() else str(c).strip() for c in _many(county)],
+            parameter=[str(EPA_PARAMETERS[c.lower()]["code"]) if c.lower() in EPA_PARAMETERS else c for c in codes],
+            poc=[str(p) for p in _many(poc)],
+            where={str(k): _many(v) for k, v in (where or {}).items()},
+        )
 
     # ---- public --------------------------------------------------------------------
     @classmethod
@@ -356,8 +594,15 @@ class EPA_PreGen:
                  resolutions: Union[str, List[str]],
                  years: Union[int, List[int]],
                  *,
-                 columns: Optional[Sequence[str]] = None,
                  bbox: Optional[BBox] = None,
+                 start_date: Union[str, date, pd.Timestamp, None] = None,
+                 end_date: Union[str, date, pd.Timestamp, None] = None,
+                 site: Union[str, Tuple[str, str, str], Sequence, None] = None,
+                 state: Union[str, int, Sequence, None] = None,
+                 county: Union[str, int, Sequence, None] = None,
+                 parameter: Union[str, int, Sequence, None] = None,
+                 poc: Union[int, Sequence[int], None] = None,
+                 where: Optional[Mapping[str, Any]] = None,
                  max_workers: int = 5,
                  use_cache: bool = True,
                  refresh: bool = False,
@@ -365,30 +610,48 @@ class EPA_PreGen:
                  cache_dir: Optional[PathLike] = None,
                  silent: bool = False,
                  show_traceback: bool = False,
-                 session_handler: Optional[SessionHandler] = None) -> atmoz_dataset:
-        """Download and parse every valid (parameter, resolution, year) combination.
+                 session_handler: Optional[SessionHandler] = None) -> AtmozDataset:
+        """Download every valid (parameter, resolution, year) combination as one frame per site and parameter.
+
+        Only ``"hourly"`` files carry timestamps (UTC and local); other resolutions raise ``ValueError``, use
+        :meth:`fetch` and :func:`read_aqs_zip` for them.
 
         Parameters
         ----------
         parameters, resolutions, years:
-            One or more of each. Parameters may be names (``"ozone"``) or AQS codes.
-        columns:
-            Load only these columns. Default: everything.
+            One or more of each. Parameters may be names (``"ozone"``) or AQS codes. They choose the files.
         bbox:
-            ``(min_lon, min_lat, max_lon, max_lat)``; keep only rows inside the box.
+            ``(west, south, east, north)`` on the site latitude / longitude.
+        start_date, end_date:
+            Inclusive local (standard time) dates. The files are still chosen by *years*; these trim the rows.
+        site:
+            An AQS id (``"240230002"``), a ``(state, county, site)`` tuple, or a list of those.
+        state, county:
+            Codes (``"24"``, ``"031"``) or names (``"Maryland"``); one or several. Codes are zero-padded.
+        parameter, poc:
+            Rows of one AQS parameter code (``44201``) or POC (monitor number) inside the file; one or several.
+        where:
+            ``{column: value-or-list}`` for any column of the file, e.g. ``{"Method Code": "087"}``.
         max_workers:
             Download threads (default 5).
         use_cache, refresh, max_age, cache_dir:
             File-cache controls. ``max_age="auto"`` revalidates the current and previous
             year's files daily (cheap ``ETag`` check) and treats older years as frozen.
             ``refresh=True`` forces a fresh download; ``use_cache=False`` keeps nothing on disk.
+            Each zip is parsed once into a parquet file next to it; filters read that parquet.
         silent:
             No progress bar and no warnings.
 
         Returns
         -------
-        atmoz_dataset
-            ``.data == {"hourly_44201_2025.csv": DataFrame, ...}``
+        AtmozDataset
+            ``source="EPA AQS"``, ``metadata`` with ``endpoint``, ``files``, ``rows`` (per file, after filtering) and
+            ``filters``. Keys are ``"{state}{county}{site}/{parameter code}"``, e.g. ``"240230002/44201"``. Each frame is
+            indexed by UTC ``time`` (hour-beginning, from ``Date GMT`` + ``Time GMT``) with columns ``value`` (the file's
+            unit, declared in ``units``: ppm stays ppm), ``lat``, ``lon``, ``poc``, ``local_time`` (naive local standard
+            time, hour-beginning) and, when present, ``mdl``, ``qualifier``, ``method_type``, ``method_code``. Several
+            POCs at a site share the frame; the ``poc`` column tells them apart. Nothing left after filtering gives an
+            empty dataset.
 
         Raises
         ------
@@ -396,13 +659,17 @@ class EPA_PreGen:
             If any file fails. No partial result is returned.
         """
         jobs = cls._validate(parameters, resolutions, years, silent=silent)
-        frames = run_jobs(
-            lambda job: cls._load_one(job, columns=columns, bbox=bbox, use_cache=use_cache, refresh=refresh,
+        if any(job["resolution"] != "hourly" for job in jobs):
+            raise ValueError("download() builds time series from the 'hourly' files only; use fetch() and read_aqs_zip() "
+                             "for daily, 8hour and annual files.")
+        filters = cls._filters(bbox, start_date, end_date, site, state, county, parameter, poc, where)
+        tables = run_jobs(
+            lambda job: cls._load_one(job, filters=filters, use_cache=use_cache, refresh=refresh,
                                       max_age=max_age, cache_dir=cache_dir, session_handler=session_handler),
             jobs, key=cls._name, describe=cls._name, noun="download", desc="Downloading EPA AQS data",
             max_workers=max_workers, silent=silent, show_traceback=show_traceback,
         )
-        return cls._assemble(frames)
+        return cls._assemble(tables, filters)
 
     @classmethod
     def fetch(cls,
