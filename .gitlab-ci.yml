@@ -38,7 +38,7 @@ core-install:
   image: python:3.11
   script:
     - pip install -e ".[dev]"
-    - pytest tests/test_package.py tests/test_aqs.py tests/test_airnow.py tests/test_cache.py tests/test_credentials.py tests/test_urls.py tests/test_units.py tests/test_ucn.py tests/test_mda8.py tests/test_dataclasses.py tests/test_collocation.py tests/test_sonde.py tests/test_stats.py tests/test_tempo.py
+    - pytest tests/test_package.py tests/test_aqs.py tests/test_airnow.py tests/test_cache.py tests/test_credentials.py tests/test_urls.py tests/test_units.py tests/test_ucn.py tests/test_mda8.py tests/test_dataclasses.py tests/test_collocation.py tests/test_sonde.py tests/test_stats.py tests/test_tempo.py tests/test_h4toh5.py
 
 wheel:
   stage: build

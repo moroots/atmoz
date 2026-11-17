@@ -24,6 +24,7 @@ nav:
   - Lidar (TOLNet, UCN): lidar.md
   - Models (GEOS-CF): models.md
   - Satellite (TEMPO): satellite.md
+  - HDF4 files: hdf4.md
   - Sondes: sonde.md
   - Collocation: collocation.md
   - Analysis (stats, vertical): analysis.md
