@@ -7,6 +7,7 @@ All notable changes to atmoz are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Lazy HDF5 reader (`atmoz.resources.hdf`): `open_h5` and `H5File` (context manager, accepts streamed file objects), `attr()` / `attrs_dict()` with bytes decoded to text, `dataset.array(dtype, fill_value="auto", key=...)` that masks the file's own fill value to NaN, `in` on groups, and a fix for infinite recursion when a node is copied or unpickled. `open_hdf(..., convert=True)`, `TOLNET.open_hdf(..., convert=True)` and `TOLNET.fetch(file_type="hdf", convert=True)` convert HDF4 / zipped files to HDF5 (converter installed on request).
 - `atmoz.resources.h4toh5`: HDF Group `h4toh5convert` for HDF4 NASA files. The binary lives in the GitHub repo (`extras/h4toh5/`), is not in the wheel, and is downloaded only on request with `install_h4toh5()` (HTTPS, SHA-256 pinned in the package, nothing fetched automatically). Includes `prepare_h5`, `h4_to_h5`, `convert_hdf4_to_hdf5` and `python -m atmoz.resources.h4toh5 install`. Linux x86-64 build provided; other platforms use `$ATMOZ_H4TOH5`.
 - **NASA TEMPO** (`atmoz.satellite`, new extra `satellite`: earthaccess, h5py, pydantic): `TEMPO(product="NO2_L3" | "O3PROF_L3", version="V04")` with `search()`,
   `download(start, end, points=, bbox=, variables=, max_quality=, lowest_layer=, only_scans=, mode=)` (granules streamed and subset at points or in a box, no full download;

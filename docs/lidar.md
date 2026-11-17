@@ -138,6 +138,14 @@ nodes = TOLNET.open_hdf(paths.values())                    # {filename: node}, o
 nodes[next(iter(nodes))]["O3.MIXING.RATIO.VOLUME_DERIVED"][()]
 ```
 
+Some TOLNet files are served as zipped **HDF4**. Pass `convert=True` to `fetch` (or `open_hdf`) to turn them into HDF5 as they arrive;
+the raw files are kept. HDF4 needs the HDF Group converter, which is never downloaded for you: install it once with
+`atmoz.resources.h4toh5.install_h4toh5()` (see [HDF4 files](hdf4.md)).
+
+```python
+paths = TOLNET.fetch("2025-07-01", "2025-07-31", file_type="hdf", convert=True)   # paths now point at .h5 files
+```
+
 ### Plotting
 
 ```python

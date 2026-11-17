@@ -42,3 +42,23 @@ path stored in the archive) and handled the same way. Inputs are never modified.
 
 The binary is the HDF Group's own tool, distributed under their BSD-style licence, and is only run as a separate program.
 See `extras/h4toh5/README.md` for provenance and how to update it.
+
+## Reading the result: the lazy HDF5 reader
+
+`atmoz.resources.hdf` opens HDF5 files lazily: nothing is read until you slice a dataset or ask for an array. It works on
+local files, on open file objects (for example `earthaccess.open` streams), and on what `prepare_h5` returns.
+
+```python
+from atmoz.resources.hdf import open_h5
+
+with open_h5("tolnet_file.h5") as f:                       # closed on exit
+    f.attrs_dict()                                         # all file attributes, bytes decoded to str
+    "ALTITUDE" in f                                        # membership test
+    o3 = f["O3.MIXING.RATIO.VOLUME_DERIVED"]
+    o3.attr("VAR_UNITS")                                   # one attribute, decoded
+    o3.array(fill_value="auto")                            # read now; the file's own fill value becomes NaN
+    o3.array(key=(slice(0, 10), slice(None)))              # or just a window
+```
+
+Pass a HDF4 or zipped file to `open_h5` and you get an error that names `prepare_h5`. `open_hdf(paths, convert=True)` and
+`TOLNET.fetch(..., file_type="hdf", convert=True)` convert first, so the whole path is download, convert, read.

@@ -466,6 +466,7 @@ class TOLNET:
               dest_dir: Optional[PathLike] = None,
               max_workers: int = 4,
               refresh: bool = False,
+              convert: bool = False,
               silent: bool = False,
               show_traceback: bool = False,
               session_handler: Optional[SessionHandler] = None,
@@ -474,16 +475,28 @@ class TOLNET:
 
         ``file_type="hdf"`` fetches the GEOMS HDF files (needs NASA EarthData credentials, see
         ``docs/configuration.md``); open them with :meth:`open_hdf`. ``dest_dir`` defaults to the atmoz cache.
+
+        ``convert=True`` (``hdf`` only) turns each file into HDF5 right after the download: TOLNet serves some files as
+        zipped HDF4. The returned paths then point at the ``.h5`` files and the raw downloads are kept. HDF4 needs the
+        HDF Group converter, which is never downloaded for you: install it once with
+        ``atmoz.resources.h4toh5.install_h4toh5()`` (see ``docs/hdf4.md``).
         """
         api = cls(session_handler)
         jobs = api._validate(min_date, max_date, file_type, query)
         folder = Path(dest_dir) if dest_dir else _cache_root("tolnet")
         folder.mkdir(parents=True, exist_ok=True)
-        return run_jobs(
+        paths = run_jobs(
             lambda job: api._fetch_one(job, dest_dir=folder, refresh=refresh),
             jobs, key=lambda j: j["file_name"], describe=lambda j: j["file_name"], noun="TOLNet file",
             desc="Fetching TOLNet files", max_workers=max_workers, silent=silent, show_traceback=show_traceback,
         )
+        return cls._to_hdf5(paths) if convert and file_type == "hdf" else paths
+
+    @staticmethod
+    def _to_hdf5(paths: Dict[str, Path]) -> Dict[str, Path]:
+        """``{name: path}`` with every file turned into HDF5 (HDF5 stays as is; HDF4 / zip are converted next to it)."""
+        from atmoz.resources.h4toh5 import prepare_h5
+        return {name: prepare_h5(path) for name, path in paths.items()}
 
     # ---- helpers on results -----------------------------------------------------------------------------------
     @staticmethod
@@ -497,10 +510,13 @@ class TOLNET:
         return {k: dict(sorted(v.items())) for k, v in out.items()}
 
     @staticmethod
-    def open_hdf(filepaths) -> Dict[str, Any]:
-        """Lazily open fetched HDF files: ``{filename: node}`` (``node["O3.MIXING.RATIO.VOLUME_DERIVED"][()]``)."""
+    def open_hdf(filepaths, *, convert: bool = False) -> Dict[str, Any]:
+        """Lazily open fetched HDF files: ``{filename: node}`` (``node["O3.MIXING.RATIO.VOLUME_DERIVED"][()]``).
+
+        ``convert=True`` first converts HDF4 / zipped files to HDF5 (needs the converter, see ``docs/hdf4.md``).
+        """
         from atmoz.resources.hdf import open_hdf
-        return open_hdf(filepaths)
+        return open_hdf(filepaths, convert=convert)
 
     # ---- plotting (one implementation: atmoz.plotting.curtain) --------------------------------------------------
     @staticmethod
