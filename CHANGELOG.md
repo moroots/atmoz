@@ -6,6 +6,19 @@ All notable changes to atmoz are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **NASA TEMPO** (`atmoz.satellite`, new extra `satellite`: earthaccess, h5py, pydantic): `TEMPO(product="NO2_L3" | "O3PROF_L3", version="V04")` with `search()`,
+  `download(start, end, points=, bbox=, variables=, max_quality=, lowest_layer=, only_scans=, mode=)` (granules streamed and subset at points or in a box, no full download;
+  returns an `AtmozDataset`, one frame per `"{region}/{variable}"`, all-or-nothing with retries), `fetch()` (whole granules to the cache, resumable with HTTP Range; returns
+  `{name: Path}`) and `TEMPO.read(paths, ...)` (the same subsetting on local granules). Columns have no `alt`; ozone profiles are long (`alt` km above sea level, `value` ppb,
+  `partial_column` DU, layer limits, pressure thickness) with `alt_reference="asl"` and the ground height on point frames. `du_to_ppbv` and `integrate_layers(frame, z_min, z_max,
+  reference="asl"|"agl")` give the lowest-layer or layer-integrated ozone. Guide `docs/satellite.md`; `tools/verify_tempo_live.py` checks the product-layout assumptions against the live archive.
+- Examples (`examples/`): `tempo_map.py` (TEMPO ozone and NO2 maps, cartopy), `tempo_vs_tolnet.py` (curtains and a layer comparison through `atmoz.collocate`), `aqs_nearest_monitor.py`.
+- `cartopy` joins the `plots` extra (used by `examples/tempo_map.py`). `molecules/cm2` is a recognised unit (`molecules/cm^2` is normalised to it).
+
+### Changed
+- CI lints `tools` and `examples` as well, installs the `satellite` extra in the test jobs, and runs `tests/test_tempo.py` (no optional dependencies) in the core-install job.
+
 ## [0.1.1] - 2026-11-16
 
 Everything below is new since 0.1.0.

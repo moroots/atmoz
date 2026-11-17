@@ -27,6 +27,7 @@ and lighter design. It is a dev / science tool: it makes common things fast and 
 * **TOLNet ozone lidar** (`atmoz.lidar`): query, download and plot NASA TOLNet profiles.
 * **UCN ceilometers** (`atmoz.lidar`): Unified Ceilometer Network 10-minute backscatter and boundary-layer data, cached compactly as parquet. L0b (raw 16 s profiles) is planned.
 * **GEOS-CF model output** (`atmoz.models`): point extractions through OPeNDAP, returned as frames (surface series or long time x level profiles) and cached.
+* **NASA TEMPO satellite data** (`atmoz.satellite`, extra `satellite`): gridded L3 NO2 columns and ozone profiles streamed at points and boxes without downloading granules; lowest-layer or layer-integrated ozone in ppb, resumable granule downloads.
 * **Balloon sondes** (`atmoz.Sonde`): NASA LaRC STAQS ozonesonde and windsonde ICARTT files (downloaded by hand) read into an `AtmozDataset`, with a check of the declared ozone unit.
 * **Data classes** (`atmoz.dataclasses`): every `download()` returns an `AtmozDataset` of `AtmozFrame`s (UTC time index, `lat` / `lon` / `alt` columns, units in `frame.units`, metadata).
 * **Collocation** (`atmoz.collocate`): put a lidar, a model, a sonde or a surface network on the first source's times, altitudes and unit, with altitude references (asl / agl) reconciled.
@@ -45,7 +46,7 @@ pip install "atmoz[surface,lidar] @ git+https://github.com/moroots/atmoz"   # ad
 pip install "atmoz[met] @ git+https://github.com/moroots/atmoz"            # meteorology (MetPy): atmoz.met, plot.skewt
 ```
 
-Extras: `surface` (maps / geo helpers), `lidar`, `models`, `plots`, `met`, `nasa`, `legacy`, `all`, `dev`.
+Extras: `surface` (maps / geo helpers), `lidar`, `models`, `satellite`, `plots`, `met`, `nasa`, `legacy`, `all`, `dev`.
 See the [installation guide](docs/installation.md).
 
 ## Quick start
@@ -90,6 +91,15 @@ atmoz.plot.comparison_profile(out)                  # mean profiles with their s
 ```
 
 ```python
+from atmoz.satellite import TEMPO, integrate_layers   # pip install "atmoz[satellite]"; needs a free Earthdata login
+
+# TEMPO ozone profile at the lidar site, streamed (no granule download): long frame, ppb, km above sea level
+o3 = TEMPO("O3PROF_L3").download("2025-07-28", points={"site": (lat, lon)})
+integrate_layers(o3, 0, 2, reference="agl")        # ground to 2 km: column (DU) and mean mixing ratio (ppb) per scan
+TEMPO("NO2_L3").download("2025-07-28", bbox=(-77.0, 38.9, -76.7, 39.1))   # tropospheric NO2 columns in a box
+```
+
+```python
 # A balloon sonde (STAQS .ict files are downloaded by hand), compared with the lidar and the model
 sonde = atmoz.Sonde.read("data/Sondes/flight.ict").frame   # alt (km asl), value (ozone, ppb), lat / lon per row
 atmoz.collocate(obs, model, sonde, names=["lidar", "geos_cf", "sonde"], window="1h")
@@ -110,7 +120,7 @@ atmoz.plot.exceedances(table)
 
 Guides live in [`docs/`](docs) (build them with `mkdocs serve`):
 [Installation](docs/installation.md) · [Configuration](docs/configuration.md) · [Caching](docs/caching.md) ·
-[Conventions](docs/conventions.md) · [Surface](docs/surface.md) · [Lidar](docs/lidar.md) · [Models](docs/models.md) ·
+[Conventions](docs/conventions.md) · [Surface](docs/surface.md) · [Lidar](docs/lidar.md) · [Models](docs/models.md) · [Satellite](docs/satellite.md) ·
 [Sondes](docs/sonde.md) · [Collocation](docs/collocation.md) · [Analysis](docs/analysis.md) · [Meteorology](docs/met.md) ·
 [Plotting](docs/plotting.md). Release notes: [CHANGELOG](CHANGELOG.md).
 
@@ -134,6 +144,8 @@ atmoz/
 ├── met.py                 # theta, dewpoint, wind components, PBL height, Skew-T (extra met)
 ├── models/
 │   └── geos_cf.py
+├── satellite/
+│   └── tempo.py           # TEMPO L3 (extra satellite)
 ├── plotting/              # atmoz.plot: curtain, profile, comparison_profile, exceedances, windrose, site_map
 ├── resources/
 │   ├── atmoz_dataclasses.py
@@ -162,7 +174,7 @@ atmoz/
 ```bash
 uv venv && uv pip install -e ".[all,dev]"
 pytest                      # offline: HTTP is faked
-ruff check atmoz tests
+ruff check atmoz tests tools examples
 ```
 
 CI (GitLab and GitHub Actions) runs the tests on Python 3.11 - 3.13, lints, and checks the built wheel.

@@ -23,6 +23,7 @@ nav:
   - Surface (AirNow / EPA AQS): surface.md
   - Lidar (TOLNet, UCN): lidar.md
   - Models (GEOS-CF): models.md
+  - Satellite (TEMPO): satellite.md
   - Sondes: sonde.md
   - Collocation: collocation.md
   - Analysis (stats, vertical): analysis.md

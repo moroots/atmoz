@@ -15,7 +15,8 @@ contains the AirNow / EPA AQS downloaders, the data classes, `atmoz.collocate`, 
 | `lidar` | pydantic, pyyaml, python-dateutil, earthaccess | `atmoz.lidar.TOLNET` |
 | `models` | pydantic, xarray, netcdf4 | `atmoz.models.GEOS_CF` |
 | `nasa` | pydantic, earthaccess | `atmoz.data_access.NASA` |
-| `plots` | plotly, windrose, geopandas, shapely | `plot.windrose`, `plot.site_map` |
+| `satellite` | pydantic, earthaccess, h5py | `atmoz.satellite.TEMPO`; see [Satellite](satellite.md) |
+| `plots` | cartopy, plotly, windrose, geopandas, shapely | `plot.windrose`, `plot.site_map`, the cartopy maps in `examples/tempo_map.py` |
 | `met` | metpy | `atmoz.met` (theta, dewpoint, wind components, PBL height) and `plot.skewt`; see [Meteorology](met.md) |
 | `legacy` | geopandas, h5py, windrose, beautifulsoup4, ... | DATAS-era helpers in `atmoz.resources` |
 | `all` | everything above | |

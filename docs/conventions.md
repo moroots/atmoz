@@ -1,6 +1,6 @@
 # Conventions
 
-Every data source in atmoz (AirNow API, EPA AQS files, TOLNet, UCN and GEOS-CF; `atmoz.Sonde.read` reads local sonde files into the same containers) follows the same
+Every data source in atmoz (AirNow API, EPA AQS files, TOLNet, UCN, GEOS-CF and TEMPO; `atmoz.Sonde.read` reads local sonde files into the same containers) follows the same
 process with the same names and returns the same containers, so you only learn it once.
 
 ## Public entry points
@@ -34,7 +34,7 @@ The same helper runs steps 3-4 for every source: `atmoz.resources.utilities.run_
 
 ## Status
 
-AirNow API, EPA AQS, TOLNet, UCN and GEOS-CF follow this process and return an `AtmozDataset` of `AtmozFrame`s.
+AirNow API, EPA AQS, TOLNet, UCN, GEOS-CF and TEMPO follow this process and return an `AtmozDataset` of `AtmozFrame`s.
 
 ## Containers
 
@@ -58,7 +58,7 @@ An **`AtmozFrame`** is one table: a pandas DataFrame plus its axes, units and me
 * `frame.alt_reference` says what `alt` is measured from, `"asl"` (above sea level) or `"agl"` (above ground), or `None` when not stated. It lives in
   `metadata["alt_reference"]`; `metadata["site_elevation_km"]` is the ground elevation. `frame.with_alt_reference("agl")` (or `"asl"`) re-expresses `alt`
   and needs the elevation. Sources set both when they know them: TOLNet files report altitude above sea level and carry the instrument elevation,
-  sondes are above sea level, GEOS-CF layer heights are above ground.
+  sondes and TEMPO ozone profiles are above sea level (TEMPO point frames carry the ground height), GEOS-CF layer heights are above ground.
 
 An **`AtmozDataset`** is a named collection of frames.
 
@@ -93,6 +93,7 @@ Frame keys follow one scheme per source:
 | UCN | `"CEILO-{n}_{YYYYMMDD}_{level}"`, e.g. `"CEILO-9_20261101_L2"` | one ceilometer, day and level, long format: `alt` (km), `value` (L2: attenuated backscatter), `lat`, `lon` | `value` |
 | GEOS-CF | the variable name, e.g. `"o3"` | one variable at the requested point: `value`, `lat`, `lon`; `alt` (km above ground) and `lev` on model-level collections (`chm`, `met3d`) | `value` |
 | Sonde | the file name, e.g. `"staqs-..._ozonesonde.ict"` | one flight (a trajectory: every row has its own time): `alt` (km above sea level), `value` (ozone, ppb), `lat`, `lon` per row, plus the file's other variables; see [Sondes](sonde.md) | `value` |
+| TEMPO | `"{region}/{variable}"`, e.g. `"GSFC/ozone_profile"`, `"bbox/vertical_column_troposphere"` | one point (or the box) and variable; columns: `value`, `lat`, `lon`, `quality_flag`; ozone profiles are long: `alt` (km above sea level), `value` (ppb), `partial_column` (DU); see [Satellite](satellite.md) | `value` |
 
 ## Units
 
@@ -106,6 +107,7 @@ mol/mol, see below). Spellings are normalised: `ppbv` is stored as `ppb` (likewi
 | AirNow API | the unit the API reports for the parameter, typically `ppb` for the gases and `µg/m3` for PM2.5 and PM10 (`ppm` where the API reports it) | One dataset can mix units; check `frame.units["value"]`. |
 | EPA AQS | as in the file; ozone stays in `ppm` | Declared in `frame.units`, never converted for you. |
 | UCN | `km^-1.sr^-1` (attenuated backscatter) | Kept as the file spells it. |
+| TEMPO | NO2 columns as the file gives them (`molecules/cm2`); ozone profile `value` in `ppb` | The profile file holds partial columns in DU; they are converted with the layer pressure thickness and kept in `partial_column` (DU). |
 
 To convert, use `convert_units`, which returns a new frame with the column and its declared unit changed:
 
