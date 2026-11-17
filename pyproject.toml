@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [
     { name = "Maurice Roots", email = "mrmoroots@gmail.com" }
 ]
-keywords = ["atmospheric science", "air quality", "ozone", "lidar", "TOLNet", "AirNow", "EPA AQS", "GEOS-CF"]
+keywords = ["atmospheric science", "air quality", "ozone", "lidar", "TOLNet", "AirNow", "EPA AQS", "GEOS-CF", "TEMPO"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
@@ -62,6 +62,12 @@ nasa = [
     "pydantic>=2.10.6",
     "earthaccess>=0.9.0",
 ]
+# NASA TEMPO gridded L3 (atmoz.satellite): Earthdata search / streaming / downloads and the HDF5 reader.
+satellite = [
+    "pydantic>=2.10.6",
+    "earthaccess>=0.9.0",
+    "h5py>=3.11.0",
+]
 # Older DATAS-era helpers in atmoz.resources (importData, makePlots, getData, geoSlicing).
 legacy = [
     "geopandas>=0.13.2",
@@ -72,8 +78,9 @@ legacy = [
     "beautifulsoup4>=4.14.3",
     "charset-normalizer",
 ]
-# Optional plotting backends: plotly (interactive maps) and windrose (wind roses).
+# Optional plotting backends: plotly (interactive maps), windrose (wind roses) and cartopy (basemaps in the TEMPO map examples).
 plots = [
+    "cartopy>=0.22",
     "plotly>=6.5.2",
     "windrose>=1.9.2",
     "geopandas>=0.13.2",
@@ -83,7 +90,7 @@ plots = [
 met = [
     "metpy>=1.6",
 ]
-all = ["atmoz[surface,lidar,models,nasa,legacy,plots,met]"]
+all = ["atmoz[surface,lidar,models,nasa,satellite,legacy,plots,met]"]
 dev = [
     "pytest>=8",
     "pytest-cov",

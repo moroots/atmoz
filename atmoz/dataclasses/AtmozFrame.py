@@ -25,7 +25,8 @@ AXES = ("lat", "lon", "alt")
 
 # Spellings normalised on construction: volume mixing ratios are stored as ppb / ppm / ppt.
 UNIT_ALIASES: Dict[str, str] = {"ppbv": "ppb", "ppmv": "ppm", "pptv": "ppt", "degC": "°C", "percent": "%", "mps": "m/s",
-                                "Pascal": "Pa", "degrees": "deg", "mMSL": "m", "mAGL": "m", "uA": "µA"}
+                                "Pascal": "Pa", "degrees": "deg", "mMSL": "m", "mAGL": "m", "uA": "µA",
+                                "molecules/cm^2": "molecules/cm2"}
 
 _KNOWN_UNITS: frozenset = frozenset({
     "1", "%", "s", "min", "h", "d",
@@ -34,7 +35,7 @@ _KNOWN_UNITS: frozenset = frozenset({
     "K", "°C",
     "kg", "g", "mg", "µg",
     "kg/kg", "g/kg", "mg/kg", "µg/kg",
-    "kg/m3", "g/m3", "mg/m3", "µg/m3", "molecules/cm3",
+    "kg/m3", "g/m3", "mg/m3", "µg/m3", "molecules/cm3", "molecules/cm2",
     "mol/mol", "ppm", "ppb", "ppt",
     "m/s", "km/h", "kn",
     "km^-1.sr^-1", "1/(km sr)", "mPa", "DU", "µA", "mA", "V",
